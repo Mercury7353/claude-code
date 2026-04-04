@@ -237,12 +237,39 @@ class TeamLeader:
 
     def _simple_decompose(self, task: dict, team: list[Agent]) -> list[SubtaskAssignment]:
         """Simple mode: one primary agent solves, others review."""
+        import re as _re
         task_type = task.get("type", "general")
         primary = max(team, key=lambda a: a.profile.skill_memory.get(task_type, 0.2))
+
+        # For code tasks, inject the exact function name to prevent wrong naming
+        subtask_prompt = task.get("prompt", str(task))
+        domain = task.get("domain", "")
+        if domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion"):
+            ep = task.get("entry_point", "")
+            if not ep:
+                # Try to extract from test cases
+                test_cases = task.get("test_cases", []) or []
+                for tc in test_cases:
+                    m = _re.search(r"assert\s+(\w+)\(", str(tc))
+                    if m:
+                        ep = m.group(1)
+                        break
+                if not ep:
+                    # Try from test string (HumanEval format)
+                    m = _re.search(r"def check\(candidate\).*?assert candidate",
+                                   task.get("test", ""), _re.DOTALL)
+                    if not m:
+                        # Try from prompt function signature
+                        m = _re.search(r"^def (\w+)\(", subtask_prompt.strip())
+                        if m:
+                            ep = m.group(1)
+            if ep:
+                subtask_prompt = f"[REQUIRED FUNCTION NAME: {ep}]\n\n" + subtask_prompt
+
         assignments = [SubtaskAssignment(
             agent_id=primary.agent_id,
             role="primary",
-            subtask_prompt=task.get("prompt", str(task)),
+            subtask_prompt=subtask_prompt,
             required_skills=[task_type],
         )]
         for agent in team:
