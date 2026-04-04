@@ -209,19 +209,44 @@ class AFlowEvaluator:
 
     def _evaluate_code(self, task: dict, response: str) -> float:
         """Try to execute code and check test cases."""
-        test_cases = task.get("test_cases", []) or [task.get("test", "")]
-        if not test_cases:
-            return 0.5
+        domain = task.get("domain", "")
 
-        # Extract code block
+        # Extract code block from response
         code = response
         if "```python" in response:
             code = response.split("```python")[1].split("```")[0]
         elif "```" in response:
             code = response.split("```")[1].split("```")[0]
 
+        if domain == "humaneval":
+            # HumanEval: run check(entry_point_fn) to actually test correctness
+            test_str = task.get("test", "")
+            entry_point = task.get("entry_point", "")
+            if not test_str:
+                return 0.5
+            try:
+                exec_globals: dict = {}
+                exec(code, exec_globals)
+                exec(test_str, exec_globals)
+                if entry_point and entry_point in exec_globals:
+                    exec_globals["check"](exec_globals[entry_point])
+                elif "check" in exec_globals:
+                    # Try to find the function by inspecting exec_globals
+                    candidates = [v for k, v in exec_globals.items()
+                                  if callable(v) and k not in ("check",) and not k.startswith("_")]
+                    if candidates:
+                        exec_globals["check"](candidates[0])
+                return 1.0
+            except Exception:
+                return 0.0
+
+        # MBPP and other code tasks: test_cases are direct assert statements
+        test_cases = task.get("test_cases", []) or [task.get("test", "")]
+        if not test_cases:
+            return 0.5
+
         passed = 0
-        total = len(test_cases)
+        total = len([t for t in test_cases if t])
         for test in test_cases:
             if not test:
                 continue
