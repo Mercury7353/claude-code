@@ -124,8 +124,22 @@ def _load_domain(domain: str, n: int, rng: random.Random, shuffle: bool) -> list
                 })
 
         elif domain == "math":
-            ds = load_dataset("hendrycks/competition_math", split="test")
-            samples = list(ds)
+            # Try primary dataset, fall back to EleutherAI mirror (multi-subject)
+            try:
+                ds = load_dataset("hendrycks/competition_math", split="test")
+                samples = list(ds)
+            except Exception:
+                _subjects = ["algebra", "counting_and_probability", "geometry",
+                             "intermediate_algebra", "number_theory", "prealgebra", "precalculus"]
+                samples = []
+                for _subj in _subjects:
+                    try:
+                        _ds = load_dataset("EleutherAI/hendrycks_math", _subj, split="test")
+                        samples.extend(list(_ds))
+                    except Exception:
+                        pass
+                if not samples:
+                    raise RuntimeError("Could not load any math dataset")
             if shuffle:
                 rng.shuffle(samples)
             for i, item in enumerate(samples[:n]):
