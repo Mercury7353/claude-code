@@ -128,7 +128,9 @@ class Agent:
         is_code_task = domain in ("mbpp", "humaneval") or task.get("type", "") in (
             "code_generation", "code_completion"
         )
-        if is_code_task:
+        # Only add code format instruction for primary agents, not reviewers
+        is_review = "Review the team's work" in subtask_prompt or "identify issues" in subtask_prompt
+        if is_code_task and not is_review:
             subtask_prompt = (
                 subtask_prompt
                 + "\n\nIMPORTANT: Output ONLY the Python function implementation "
