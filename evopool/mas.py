@@ -608,10 +608,30 @@ class TeamLeader:
                 return stripped
             return ""
 
-        def _sanitize_function_name(code: str, entry_point: str) -> str:
-            """Rename the first top-level function to entry_point if it has a different name."""
+        def _sanitize_function_name(code: str, entry_point: str, task_prompt: str = "") -> str:
+            """
+            Ensure code has the correct function name.
+            If code is only a function body (no def line), prepend the signature from the task.
+            If code has a different function name, rename the first function.
+            """
             if not entry_point or not code:
                 return code
+
+            # If no 'def' in code, it's just a function body — try to prepend the signature
+            if not _re.search(r"^\s*def\s+\w+", code, _re.MULTILINE):
+                # Extract function signature from task prompt
+                sig_match = _re.search(
+                    r"(def\s+" + _re.escape(entry_point) + r"\s*\([^)]*\)[^:]*:)",
+                    task_prompt,
+                )
+                if sig_match:
+                    # Indent the body and prepend the signature
+                    body = "\n".join("    " + line if line.strip() else line
+                                     for line in code.splitlines())
+                    return sig_match.group(1) + "\n" + body
+                # No signature found, return as-is
+                return code
+
             # Check if entry_point already exists in code
             if _re.search(r"\bdef\s+" + _re.escape(entry_point) + r"\s*\(", code):
                 return code
@@ -695,7 +715,7 @@ class TeamLeader:
                 continue
             # Sanitize function name to match entry_point (critical for HumanEval)
             if entry_point:
-                code = _sanitize_function_name(code, entry_point)
+                code = _sanitize_function_name(code, entry_point, task.get("prompt", ""))
             score = _test_score(code, task)
             syn = _syntax_ok(code)
             priority = 1 if r.role == "primary" else 0
