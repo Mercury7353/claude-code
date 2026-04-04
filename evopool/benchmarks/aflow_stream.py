@@ -247,10 +247,11 @@ class AFlowEvaluator:
                 nums = _re.findall(r"-?[\d]+(?:\.\d+)?(?:/\d+)?", answer)
                 target = nums[-1] if nums else ""
             if target:
-                # Normalize: remove LaTeX formatting
-                target_clean = _re.sub(r"\\[a-zA-Z]+\{?|[{}\\]", "", target).strip().lower()
-                response_clean = response_lower
-                return 1.0 if (target_clean in response_clean or target in response_lower) else 0.0
+                # Normalize: remove LaTeX commands but keep digits, /, -, .
+                target_clean = _re.sub(r"\\[a-zA-Z]+", " ", target)  # remove \cmd
+                target_clean = _re.sub(r"[{}\s]", "", target_clean).strip().lower()  # strip braces/spaces
+                return 1.0 if (target_clean in response_lower or target in response_lower or
+                               target.replace(" ", "") in response_lower.replace(" ", "")) else 0.0
 
         # DROP: answers are short numeric or text spans
         if domain == "drop":
