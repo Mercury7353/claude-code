@@ -168,10 +168,13 @@ class Agent:
         task_type = task.get("type", "general")
         score = outcome.get("score", 0.5)
 
-        # Update skill memory
+        # Update skill memory with adaptive learning rate.
+        # Use faster updates early (few observations) and slower updates later
+        # to prevent rapid convergence and preserve specialization.
+        n_obs = len(self.profile.perf_stats.get(task_type, []))
+        alpha = max(0.1, 0.6 / (1 + n_obs * 0.3))  # starts at 0.6, decays toward 0.1
         prev = self.profile.skill_memory.get(task_type, 0.5)
-        # Exponential moving average
-        self.profile.skill_memory[task_type] = 0.8 * prev + 0.2 * score
+        self.profile.skill_memory[task_type] = (1 - alpha) * prev + alpha * score
 
         # Update performance stats
         if task_type not in self.profile.perf_stats:

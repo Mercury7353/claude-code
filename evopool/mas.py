@@ -355,23 +355,22 @@ class TeamLeader:
 
     def _synthesize(self, task: dict, all_results: list[SubtaskResult]) -> str:
         """Leader synthesizes all subtask results into a final answer."""
+        domain = task.get("domain", "")
+        is_code_task = domain in ("mbpp", "humaneval") or task.get("type", "") in ("code_generation", "code_completion")
+
+        # For code tasks: pick the best syntactically valid implementation
+        # rather than hallucinating a synthesis of multiple code blocks.
+        if is_code_task:
+            return self._pick_best_code(task, all_results)
+
         results_text = "\n\n".join(
             f"=== {r.role} (Agent {r.agent_id}) ===\n{r.response}"
             for r in all_results
         )
-        domain = task.get("domain", "")
-        is_code_task = domain in ("mbpp", "humaneval") or task.get("type", "") in ("code_generation", "code_completion")
-        if is_code_task:
-            format_instruction = (
-                "Output ONLY the Python function implementation in a markdown code block. "
-                "Format: ```python\n<your code here>\n``` "
-                "Do NOT include explanations, test cases, or any text outside the code block."
-            )
-        else:
-            format_instruction = (
-                "Incorporate the best contributions and address any critiques. "
-                "Output only the final answer."
-            )
+        format_instruction = (
+            "Incorporate the best contributions and address any critiques. "
+            "Output only the final answer."
+        )
         prompt = (
             f"Task: {task.get('prompt', '')[:600]}\n\n"
             f"Your team's work:\n{results_text}\n\n"
@@ -391,6 +390,82 @@ class TeamLeader:
                 if r.role == "primary":
                     return r.response
             return all_results[0].response if all_results else ""
+
+    def _pick_best_code(self, task: dict, all_results: list[SubtaskResult]) -> str:
+        """
+        For code tasks: pick the best implementation from all_results.
+        Priority: (1) passes most test cases, (2) valid syntax, (3) primary agent.
+        Avoids hallucinating a synthesis of multiple code blocks.
+        """
+        import re as _re
+
+        def _extract_code(text: str) -> str:
+            if "```python" in text:
+                return text.split("```python")[1].split("```")[0].strip()
+            if "```" in text:
+                return text.split("```")[1].split("```")[0].strip()
+            return text.strip()
+
+        def _test_score(code: str, task: dict) -> float:
+            test_cases = task.get("test_cases") or []
+            test_str = task.get("test", "")
+            entry_point = task.get("entry_point", "")
+            if not test_cases and not test_str:
+                return 0.5  # No tests available — give neutral score
+            # HumanEval: run check(fn)
+            if test_str and entry_point:
+                try:
+                    g: dict = {}
+                    exec(code, g)
+                    exec(test_str, g)
+                    if entry_point in g:
+                        g["check"](g[entry_point])
+                    return 1.0
+                except Exception:
+                    return 0.0
+            # MBPP: run assert statements
+            if test_cases:
+                passed = 0
+                for tc in test_cases:
+                    try:
+                        g2: dict = {}
+                        exec(code, g2)
+                        exec(tc, g2)
+                        passed += 1
+                    except Exception:
+                        pass
+                return passed / len(test_cases)
+            return 0.5
+
+        def _syntax_ok(code: str) -> bool:
+            try:
+                compile(code, "<string>", "exec")
+                return True
+            except SyntaxError:
+                return False
+
+        candidates = []
+        for r in all_results:
+            if r.role in ("reviewer", "critic"):
+                continue  # skip non-implementation roles
+            code = _extract_code(r.response)
+            if not code:
+                continue
+            score = _test_score(code, task)
+            syn = _syntax_ok(code)
+            priority = 1 if r.role == "primary" else 0
+            candidates.append((score, syn, priority, r.response))
+
+        if not candidates:
+            # fallback: primary or first
+            for r in all_results:
+                if r.role == "primary":
+                    return r.response
+            return all_results[0].response if all_results else ""
+
+        # Sort: test score desc, syntax ok desc, primary first
+        candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+        return candidates[0][3]
 
     def _generate_feedback(
         self, task: dict, all_results: list[SubtaskResult]

@@ -62,12 +62,70 @@ class EvoPool:
         self.lifecycle_events: list[LifecycleEvent] = []
         self.metrics_log: list[dict] = []
 
+    # Diverse initial personas to bootstrap specialization.
+    # One-third math/science, one-third code/engineering, one-third QA/language.
+    _INIT_PERSONAS = [
+        # Math / reasoning specialists
+        ("math_specialist",
+         "A mathematical reasoning expert skilled in algebra, calculus, combinatorics, and "
+         "competition mathematics. Strong at step-by-step derivations and numerical verification.",
+         {"math_competition": 0.7, "math_word_problem": 0.65, "arithmetic": 0.7}),
+        ("quantitative_analyst",
+         "An analytical agent with deep experience in quantitative problem solving, "
+         "statistical reasoning, and structured multi-step arithmetic.",
+         {"math_word_problem": 0.7, "math_competition": 0.6}),
+        ("logic_reasoner",
+         "A deductive reasoning specialist adept at formal logic, proofs, and "
+         "multi-step inference chains.",
+         {"math_competition": 0.6, "multi_hop_qa": 0.6}),
+        # Code / engineering specialists
+        ("python_engineer",
+         "A senior Python engineer with deep expertise in algorithms, data structures, "
+         "and writing correct, efficient code solutions with passing test cases.",
+         {"code_generation": 0.75, "code_completion": 0.75, "programming": 0.7}),
+        ("software_developer",
+         "A software development expert skilled at implementing functions from specifications, "
+         "debugging, and ensuring code correctness against test suites.",
+         {"code_generation": 0.7, "code_completion": 0.7}),
+        ("algorithm_specialist",
+         "An algorithms and data structures expert who writes clean, optimized Python code "
+         "and understands time/space complexity trade-offs.",
+         {"code_completion": 0.7, "code_generation": 0.65}),
+        # QA / language specialists
+        ("qa_researcher",
+         "A research-oriented question-answering agent skilled at multi-hop reasoning, "
+         "evidence synthesis, and extracting precise answers from passages.",
+         {"multi_hop_qa": 0.75, "reading_comprehension": 0.7, "factual_qa": 0.7}),
+        ("reading_comprehension_expert",
+         "An expert at reading comprehension and information extraction from complex passages, "
+         "including numerical and span-based answers.",
+         {"reading_comprehension": 0.75, "multi_hop_qa": 0.65}),
+    ]
+
     def _init_pool(self) -> list[Agent]:
-        """Initialize pool with generalist agents."""
+        """
+        Initialize pool with a mix of domain-specialist and generalist agents.
+        The first 8 agents get domain-specific priors; the rest are generalists.
+        This bootstraps specialization so team selection is meaningful from task 1.
+        """
         agents = []
-        for i in range(self.config.pool_size_init):
+        n = self.config.pool_size_init
+        n_spec = min(len(self._INIT_PERSONAS), n)
+
+        for i in range(n_spec):
+            agent_tag, persona, skill_prior = self._INIT_PERSONAS[i]
             profile = AgentProfile(
-                persona=f"Agent-{i}: A general-purpose AI assistant with broad capabilities.",
+                persona=f"Agent-{i} ({agent_tag}): {persona}",
+                skill_memory=dict(skill_prior),
+                task_history=[],
+                collab_log={},
+                perf_stats={},
+            )
+            agents.append(Agent(profile=profile))
+
+        for i in range(n_spec, n):
+            profile = AgentProfile(
+                persona=f"Agent-{i}: A versatile general-purpose AI assistant with broad capabilities.",
                 skill_memory={},
                 task_history=[],
                 collab_log={},
