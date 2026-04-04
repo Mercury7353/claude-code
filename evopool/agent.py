@@ -124,6 +124,16 @@ class Agent:
     ) -> dict:
         """Execute an assigned subtask with injected context from other agents."""
         system_prompt = self.build_system_prompt()
+        domain = task.get("domain", "")
+        is_code_task = domain in ("mbpp", "humaneval") or task.get("type", "") in (
+            "code_generation", "code_completion"
+        )
+        if is_code_task:
+            subtask_prompt = (
+                subtask_prompt
+                + "\n\nIMPORTANT: Output ONLY the Python function implementation "
+                "in a markdown code block (```python ... ```) with no explanation outside the block."
+            )
         user_prompt = subtask_prompt
         if context:
             user_prompt = f"Context from teammates:\n{context}\n\n---\nYour task:\n{subtask_prompt}"

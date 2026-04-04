@@ -332,12 +332,24 @@ class TeamLeader:
             f"=== {r.role} (Agent {r.agent_id}) ===\n{r.response}"
             for r in all_results
         )
+        domain = task.get("domain", "")
+        is_code_task = domain in ("mbpp", "humaneval") or task.get("type", "") in ("code_generation", "code_completion")
+        if is_code_task:
+            format_instruction = (
+                "Output ONLY the Python function implementation in a markdown code block. "
+                "Format: ```python\n<your code here>\n``` "
+                "Do NOT include explanations, test cases, or any text outside the code block."
+            )
+        else:
+            format_instruction = (
+                "Incorporate the best contributions and address any critiques. "
+                "Output only the final answer."
+            )
         prompt = (
             f"Task: {task.get('prompt', '')[:600]}\n\n"
             f"Your team's work:\n{results_text}\n\n"
-            "Synthesize the above into a single, complete, correct final answer. "
-            "Incorporate the best contributions and address any critiques. "
-            "Output only the final answer."
+            f"Synthesize the above into a single, complete, correct final answer. "
+            f"{format_instruction}"
         )
         try:
             return llm_call(
