@@ -90,6 +90,7 @@ class CrystallizedInsight:
     affected_domains: list[str]
     skill_updates: dict[str, float]   # domain -> delta (can be positive or negative)
     new_hypotheses: list[str]         # new beliefs/hypotheses to test in future tasks
+    is_generalizable: bool = False    # True = cross-domain reasoning strategy (apply everywhere)
 
 
 @dataclass
@@ -311,21 +312,26 @@ def _phase_crystallize_from_reflections(
             + (f"Peer observations:\n" + "\n".join(peer_material) + "\n\n" if peer_material else "")
             + "Based on this failure pattern and your team's observations, what is ONE concrete "
             "strategy update you are taking away? Be specific — name the type of mistake and "
-            "the exact fix (not vague advice like 'be more careful').\n\n"
+            "the exact fix.\n\n"
+            "Then judge: is this insight a GENERAL reasoning strategy (applies to any task type, "
+            "e.g. 'decompose into sub-problems and verify each step') or DOMAIN-SPECIFIC "
+            "(e.g. 'for fraction problems, simplify before solving')?\n\n"
             "Respond with JSON:\n"
             "{\n"
             '  "insight": "one concrete lesson (2 sentences max)",\n'
-            '  "affected_domains": ["domain1"],\n'
+            '  "is_generalizable": true/false,\n'
+            '  "affected_domains": ["all"] if generalizable else ["domain1"],\n'
             '  "skill_updates": {"domain1": 0.05},\n'
             '  "new_hypotheses": ["hypothesis"]\n'
             "}"
         )
         try:
-            raw = llm_call(model=backbone_llm, user=prompt, max_tokens=250)
+            raw = llm_call(model=backbone_llm, user=prompt, max_tokens=300)
             data = json.loads(raw.strip())
             insights.append(CrystallizedInsight(
                 agent_id=agent.agent_id,
                 insight=data.get("insight", ""),
+                is_generalizable=bool(data.get("is_generalizable", False)),
                 affected_domains=data.get("affected_domains", []),
                 skill_updates=data.get("skill_updates", {}),
                 new_hypotheses=data.get("new_hypotheses", []),
@@ -756,22 +762,36 @@ def _apply_insights(
         if agent is None:
             continue
 
-        # Apply skill updates (bounded, domain-constrained)
+        # Generalizable insights: cross-domain reasoning strategies that apply to all tasks.
+        # These bypass domain filtering and are written directly into the agent's persona
+        # so they influence future task execution regardless of domain.
+        if insight.is_generalizable and insight.insight:
+            _append_to_persona(agent, insight.insight, tag="[General strategy]")
+            # Also store in hypotheses for visibility
+            if not hasattr(agent.profile, 'hypotheses'):
+                agent.profile.hypotheses = []
+            agent.profile.hypotheses = (
+                getattr(agent.profile, 'hypotheses', []) + [insight.insight]
+            )[-5:]
+            # Don't apply skill_updates for generalizable insights — they are reasoning
+            # strategies, not domain-specific competency signals
+            continue
+
+        # Domain-specific insights: apply skill updates (bounded, domain-constrained)
         for domain, delta in insight.skill_updates.items():
             # Skip updates to domains unrelated to the current task's domain.
-            # This is the key fix for cross-domain profile corruption.
             if task_domain and not _domains_related(domain, task_domain):
                 continue
             delta = max(-0.10, min(0.15, delta))  # bound per-session update
             old = agent.profile.skill_memory.get(domain, 0.3)
             agent.profile.skill_memory[domain] = max(0.0, min(1.0, old + delta))
 
-        # Store new hypotheses (ephemeral — used in next task's system prompt)
+        # Store new hypotheses
         if not hasattr(agent.profile, 'hypotheses'):
             agent.profile.hypotheses = []
         agent.profile.hypotheses = (
             getattr(agent.profile, 'hypotheses', []) + insight.new_hypotheses
-        )[-5:]  # Keep last 5 hypotheses max
+        )[-5:]
 
         # Update collab_log with the insight (what was learned from this dream)
         for aid in [i.agent_id for i in insights if i.agent_id != insight.agent_id]:
@@ -779,6 +799,20 @@ def _apply_insights(
                 agent.profile.collab_log[aid] = []
             agent.profile.collab_log[aid].append(insight.insight[:150])
             agent.profile.collab_log[aid] = agent.profile.collab_log[aid][-5:]
+
+
+def _append_to_persona(agent, insight_text: str, tag: str = "") -> None:
+    """Append a verified insight to agent persona (bounded to last 3 general strategies)."""
+    marker = f"\n{tag}: {insight_text}" if tag else f"\n{insight_text}"
+    # Keep at most 3 general strategies in persona to avoid prompt bloat
+    import re as _re
+    existing = _re.findall(r"\[General strategy\]:.*", agent.profile.persona)
+    if len(existing) >= 3:
+        # Drop oldest general strategy
+        agent.profile.persona = _re.sub(
+            r"\n\[General strategy\]:.*", "", agent.profile.persona, count=1
+        )
+    agent.profile.persona = agent.profile.persona.rstrip() + marker
 
 
 # Domain relatedness map — skills that belong to the same macro-domain cluster.
