@@ -186,23 +186,68 @@ class AFlowEvaluator:
         return scores
 
     def _evaluate_response(self, task: dict, response: str) -> float:
-        """Simple string-match evaluation. Returns 0 or 1."""
-        answer = str(task.get("answer", "")).lower().strip()
+        """Evaluation. Returns score 0–1."""
+        import re as _re
+        answer = str(task.get("answer", "")).strip()
         response_lower = response.lower().strip()
+        domain = task.get("domain", "")
 
-        if not answer or answer == "placeholder_answer":
+        if not answer or answer.lower() == "placeholder_answer":
             return 0.5  # Neutral for dummy tasks
 
         # For code tasks, try to extract and test
-        domain = task.get("domain", "")
         if domain in ("mbpp", "humaneval"):
             return self._evaluate_code(task, response)
 
-        # For QA/math: check if answer appears in response
-        if answer in response_lower:
+        # GSM8K: reference answer is full solution ending with "#### <number>"
+        # Extract just the final number for evaluation
+        if domain == "gsm8k":
+            match = _re.search(r"####\s*([\d,\.]+)", answer)
+            if match:
+                final_num = match.group(1).replace(",", "")
+                # Check if response contains this number
+                response_nums = _re.findall(r"[\d,\.]+", response)
+                response_nums_clean = {n.replace(",", "").rstrip(".") for n in response_nums}
+                return 1.0 if final_num.rstrip(".") in response_nums_clean else 0.0
+
+        # MATH: reference is full solution. Extract last number/expression.
+        if domain == "math":
+            # Look for boxed answer or last number
+            boxed = _re.search(r"\\boxed\{([^}]+)\}", answer)
+            if boxed:
+                target = boxed.group(1).strip().lower()
+                return 1.0 if target in response_lower else 0.0
+            # Fallback: last number in answer
+            nums = _re.findall(r"[\d\.]+", answer)
+            if nums:
+                target = nums[-1]
+                return 1.0 if target in response_lower else 0.0
+
+        # DROP: answers are short numeric or text spans
+        if domain == "drop":
+            answer_lower = answer.lower().strip()
+            if answer_lower in response_lower:
+                return 1.0
+            return 0.0
+
+        # HotpotQA: short text answer
+        if domain == "hotpotqa":
+            answer_lower = answer.lower().strip()
+            if answer_lower in response_lower:
+                return 1.0
+            # Partial word overlap for short answers
+            answer_words = set(answer_lower.split())
+            response_words = set(response_lower.split())
+            if answer_words:
+                overlap = len(answer_words & response_words) / len(answer_words)
+                return min(overlap, 1.0)
+            return 0.0
+
+        # Generic fallback: exact match then word overlap
+        answer_lower = answer.lower().strip()
+        if answer_lower in response_lower:
             return 1.0
-        # Partial match
-        answer_words = set(answer.split())
+        answer_words = set(answer_lower.split())
         response_words = set(response_lower.split())
         overlap = len(answer_words & response_words) / max(len(answer_words), 1)
         return min(overlap, 1.0)
