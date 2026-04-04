@@ -80,12 +80,21 @@ async def _workflow_math(ops: dict, prompt: str) -> str:
     # Generate 3 independent chain-of-thought solutions
     solutions = []
     for _ in range(3):
-        resp = await ops["custom"](input=prompt, instruction="Solve this math problem step by step:\n")
-        solutions.append(resp.get("response", ""))
+        try:
+            resp = await ops["custom"](input=prompt, instruction="Solve this math problem step by step:\n")
+            solutions.append(resp.get("response", ""))
+        except Exception:
+            pass
 
-    # Self-consistency ensemble
-    best = await ops["sc_ensemble"](solutions=solutions, problem=prompt)
-    return best.get("response", solutions[0])
+    if not solutions:
+        return ""
+
+    # Self-consistency ensemble (falls back to first solution on error)
+    try:
+        best = await ops["sc_ensemble"](solutions=solutions, problem=prompt)
+        return best.get("response", solutions[0])
+    except Exception:
+        return solutions[0]
 
 
 async def _workflow_code(ops: dict, prompt: str, entry_point: str = "solution") -> str:
