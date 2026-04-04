@@ -248,7 +248,12 @@ class AFlowEvaluator:
 
             def _normalize_math(s: str) -> str:
                 """Strip LaTeX markup, whitespace, and normalize for comparison."""
-                s = _re.sub(r"\\[a-zA-Z]+", "", s)   # remove \cmd (frac, sqrt, cdot...)
+                # Convert \frac{a}{b} → a/b BEFORE stripping LaTeX commands,
+                # so that \frac{3}{5} and 3/5 both normalize to "3/5" (not "35")
+                s = _re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"\1/\2", s)
+                # Convert \sqrt{a} → sqrt(a) to preserve meaning
+                s = _re.sub(r"\\sqrt\{([^}]*)\}", r"sqrt(\1)", s)
+                s = _re.sub(r"\\[a-zA-Z]+", "", s)   # remove remaining \cmd
                 s = _re.sub(r"[{}\$\s,]", "", s)      # strip braces, dollar signs, spaces, commas
                 return s.strip().lower()
 

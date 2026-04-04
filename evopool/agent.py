@@ -185,7 +185,11 @@ class Agent:
         if domain == "gsm8k" or task_type == "math_word_problem":
             user_prompt = user_prompt + "\n\nSolve step by step. End your answer with: #### <final number>"
         elif task_type in ("math_competition", "arithmetic") or domain == "math":
-            user_prompt = user_prompt + "\n\nSolve step by step. Box your final answer: \\boxed{<answer>}"
+            user_prompt = (
+                user_prompt
+                + "\n\nSolve step by step. Express your final answer in LaTeX inside \\boxed{}."
+                + " For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
+            )
 
         response = llm_call(
             model=backbone_llm,
