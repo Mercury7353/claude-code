@@ -41,7 +41,7 @@ class DyLANPool:
         team_size: int = 3,
         backbone_llm: str = "qwen3-8b",
         seed: int = 42,
-        rounds: int = 2,
+        rounds: int = 3,
     ):
         self.pool_size = pool_size
         self.team_size = team_size
