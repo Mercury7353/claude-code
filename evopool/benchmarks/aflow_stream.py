@@ -241,17 +241,33 @@ class AFlowEvaluator:
                             return s[start:i].strip()
                 return s[start:].strip()
 
+            def _normalize_math(s: str) -> str:
+                """Strip LaTeX markup, whitespace, and normalize for comparison."""
+                s = _re.sub(r"\\[a-zA-Z]+", "", s)  # remove \cmd
+                s = _re.sub(r"[{}\s,]", "", s)       # strip braces, spaces, commas
+                return s.strip().lower()
+
             target = _extract_boxed(answer)
             if not target:
-                # Fallback: last number in answer
                 nums = _re.findall(r"-?[\d]+(?:\.\d+)?(?:/\d+)?", answer)
                 target = nums[-1] if nums else ""
             if target:
-                # Normalize: remove LaTeX commands but keep digits, /, -, .
-                target_clean = _re.sub(r"\\[a-zA-Z]+", " ", target)  # remove \cmd
-                target_clean = _re.sub(r"[{}\s]", "", target_clean).strip().lower()  # strip braces/spaces
-                return 1.0 if (target_clean in response_lower or target in response_lower or
-                               target.replace(" ", "") in response_lower.replace(" ", "")) else 0.0
+                target_norm = _normalize_math(target)
+                # Also extract boxed from response for direct comparison
+                response_boxed = _extract_boxed(response)
+                response_boxed_norm = _normalize_math(response_boxed) if response_boxed else ""
+
+                # 1. Exact match of normalized boxed contents
+                if target_norm and response_boxed_norm and target_norm == response_boxed_norm:
+                    return 1.0
+                # 2. Target appears verbatim in response
+                if target in response_lower or target.replace(" ", "") in response_lower.replace(" ", ""):
+                    return 1.0
+                # 3. Normalized target in normalized response (for LaTeX variations)
+                # Only use normalized substring match if target is non-trivial (>2 chars)
+                if len(target_norm) > 2 and target_norm in _normalize_math(response):
+                    return 1.0
+                return 0.0
 
         # DROP: answers are short numeric or text spans
         if domain == "drop":
