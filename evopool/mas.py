@@ -199,11 +199,23 @@ class TeamLeader:
             nums = _re.findall(r"-?[\d]+(?:\.\d+)?(?:/\d+)?", text)
             return nums[-1] if nums else ""
 
+        def _normalize_ans(s: str) -> str:
+            """Normalize math answer for voting (LaTeX variations → canonical form)."""
+            s = s.strip().lower()
+            # Remove LaTeX commands (frac, sqrt, etc.) and braces
+            s = _re.sub(r"\\[a-zA-Z]+", "", s)
+            s = _re.sub(r"[{}\$\s,]", "", s)
+            # Remove trailing zeros after decimal: 0.750 → 0.75
+            s = _re.sub(r"(\.\d*?)0+$", r"\1", s).rstrip(".")
+            return s
+
         answer_votes: dict[str, list[str]] = {}
         for r in results:
             ans = _extract_final(r.response)
             if ans:
-                key = ans.strip().lower()
+                key = _normalize_ans(ans)
+                if not key:
+                    continue
                 if key not in answer_votes:
                     answer_votes[key] = []
                 answer_votes[key].append(r.agent_id)
