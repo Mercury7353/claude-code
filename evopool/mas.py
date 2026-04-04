@@ -88,6 +88,7 @@ class TeamLeader:
         self.critique_enabled = critique_enabled
 
     _MATH_TYPES = {"math_competition", "math_word_problem", "arithmetic"}
+    _QA_TYPES = {"multi_hop_qa", "reading_comprehension", "factual_qa"}
 
     def run(self, task: dict) -> MASResult:
         """Full leader-coordinated task execution pipeline."""
@@ -98,6 +99,11 @@ class TeamLeader:
         task_type = task.get("type", "general")
         if task_type in self._MATH_TYPES:
             return self._run_self_consistency(task)
+
+        # QA tasks: also use self-consistency (pick most common short answer).
+        # This mirrors AFlow's ScEnsemble approach for QA.
+        if task_type in self._QA_TYPES:
+            return self._run_qa_self_consistency(task)
 
         # Step 1: Analyze task
         analysis = self._analyze_task(task)
@@ -220,6 +226,71 @@ class TeamLeader:
             per_agent_responses=per_agent_responses,
             per_agent_feedback={},
             decomposition_plan=[{"agent_id": r.agent_id, "role": "primary", "skills": ["math"]}
+                                 for r in results],
+            extra_agents_recruited=[],
+            n_rounds=1,
+        )
+
+    def _run_qa_self_consistency(self, task: dict) -> MASResult:
+        """
+        Self-consistency mode for QA tasks (HotpotQA, DROP).
+        All k agents answer independently → pick the most common short answer.
+        Mirrors AFlow's ScEnsemble for QA, which works well for span-extraction tasks.
+        """
+        import re as _re
+
+        results: list[SubtaskResult] = []
+        per_agent_responses: dict[str, dict] = {}
+
+        for agent in self.team:
+            resp = agent.execute_task(task, self.backbone_llm)
+            results.append(SubtaskResult(
+                agent_id=agent.agent_id,
+                role="primary",
+                subtask_name="answer",
+                response=resp.get("response", ""),
+            ))
+            per_agent_responses[agent.agent_id] = resp
+
+        # Extract short answers from each response for voting.
+        # For QA, take the last sentence (tends to be the direct answer) or last line.
+        def _extract_answer(text: str) -> str:
+            text = text.strip()
+            # Take last non-empty line
+            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            if not lines:
+                return text[:100].strip()
+            last = lines[-1]
+            # Remove common prefixes
+            for prefix in ("the answer is", "answer:", "therefore,", "so,", "thus,"):
+                if last.lower().startswith(prefix):
+                    last = last[len(prefix):].strip().strip(":").strip()
+            return last[:200].lower().strip()
+
+        answer_votes: dict[str, list[str]] = {}
+        for r in results:
+            ans = _extract_answer(r.response)
+            if ans:
+                if ans not in answer_votes:
+                    answer_votes[ans] = []
+                answer_votes[ans].append(r.agent_id)
+
+        # Pick majority answer; tie → leader's response
+        best_response = results[0].response
+        if answer_votes:
+            best_key = max(answer_votes.keys(), key=lambda k: len(answer_votes[k]))
+            majority_ids = set(answer_votes[best_key])
+            for r in results:
+                if r.agent_id in majority_ids:
+                    best_response = r.response
+                    break
+
+        return MASResult(
+            final_answer=best_response,
+            leader_id=self.leader.agent_id,
+            per_agent_responses=per_agent_responses,
+            per_agent_feedback={},
+            decomposition_plan=[{"agent_id": r.agent_id, "role": "primary", "skills": ["qa"]}
                                  for r in results],
             extra_agents_recruited=[],
             n_rounds=1,
