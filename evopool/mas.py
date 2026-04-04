@@ -87,9 +87,17 @@ class TeamLeader:
         self.max_extra_agents = max_extra_agents
         self.critique_enabled = critique_enabled
 
+    _MATH_TYPES = {"math_competition", "math_word_problem", "arithmetic"}
+
     def run(self, task: dict) -> MASResult:
         """Full leader-coordinated task execution pipeline."""
         extra_recruited: list[str] = []
+
+        # Math tasks: use self-consistency (all agents solve independently,
+        # pick majority answer) rather than primary+reviewer decomposition.
+        task_type = task.get("type", "general")
+        if task_type in self._MATH_TYPES:
+            return self._run_self_consistency(task)
 
         # Step 1: Analyze task
         analysis = self._analyze_task(task)
@@ -140,6 +148,81 @@ class TeamLeader:
             ],
             extra_agents_recruited=extra_recruited,
             n_rounds=1 + (1 if results_r2 else 0),
+        )
+
+    def _run_self_consistency(self, task: dict) -> MASResult:
+        """
+        Self-consistency mode for math tasks.
+        All k agents solve independently → pick the majority final answer.
+        This mirrors AFlow's ScEnsemble approach, which is well-suited for
+        math where multiple solution paths converge on the correct answer.
+        """
+        import re as _re
+
+        results: list[SubtaskResult] = []
+        per_agent_responses: dict[str, dict] = {}
+
+        for agent in self.team:
+            resp = agent.execute_task(task, self.backbone_llm)
+            results.append(SubtaskResult(
+                agent_id=agent.agent_id,
+                role="primary",
+                subtask_name="solve",
+                response=resp.get("response", ""),
+            ))
+            per_agent_responses[agent.agent_id] = resp
+
+        # Extract final answers and vote
+        def _extract_final(text: str) -> str:
+            # Try \boxed{...}
+            m = _re.search(r"\\boxed\{", text)
+            if m:
+                depth, start = 1, m.end()
+                for i in range(start, len(text)):
+                    if text[i] == "{":
+                        depth += 1
+                    elif text[i] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            return text[start:i].strip()
+            # Try "#### number" (GSM8K format)
+            m2 = _re.search(r"####\s*([\d,\.]+)", text)
+            if m2:
+                return m2.group(1).replace(",", "")
+            # Last number in the response
+            nums = _re.findall(r"-?[\d]+(?:\.\d+)?(?:/\d+)?", text)
+            return nums[-1] if nums else ""
+
+        answer_votes: dict[str, list[str]] = {}
+        for r in results:
+            ans = _extract_final(r.response)
+            if ans:
+                key = ans.strip().lower()
+                if key not in answer_votes:
+                    answer_votes[key] = []
+                answer_votes[key].append(r.agent_id)
+
+        # Pick majority answer; tie → primary agent (leader)
+        best_answer = ""
+        best_response = results[0].response
+        if answer_votes:
+            best_key = max(answer_votes.keys(), key=lambda k: len(answer_votes[k]))
+            # Find the response from the majority group that belongs to the leader
+            majority_ids = set(answer_votes[best_key])
+            for r in results:
+                if r.agent_id in majority_ids:
+                    best_response = r.response
+                    break
+
+        return MASResult(
+            final_answer=best_response,
+            leader_id=self.leader.agent_id,
+            per_agent_responses=per_agent_responses,
+            per_agent_feedback={},
+            decomposition_plan=[{"agent_id": r.agent_id, "role": "primary", "skills": ["math"]}
+                                 for r in results],
+            extra_agents_recruited=[],
+            n_rounds=1,
         )
 
     # ------------------------------------------------------------------
