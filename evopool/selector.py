@@ -138,7 +138,7 @@ def _compute_score(
     w_collab: float,
 ) -> float:
     affinity = _affinity_score(candidate, task_type)
-    diversity = _diversity_bonus(candidate, current_team)
+    diversity = _diversity_bonus(candidate, current_team, task_type)
     collab = _collab_score(candidate, current_team, collab_table)
     return w_affinity * affinity + w_diversity * diversity + w_collab * collab
 
@@ -148,10 +148,20 @@ def _affinity_score(agent: Agent, task_type: str) -> float:
     return agent.profile.skill_memory.get(task_type, 0.2)
 
 
-def _diversity_bonus(candidate: Agent, current_team: list[Agent]) -> float:
+def _diversity_bonus(
+    candidate: Agent,
+    current_team: list[Agent],
+    task_type: str = "",
+) -> float:
     """
     Reward for adding domain diversity to the current team.
     Higher = candidate covers domains not already covered by team.
+
+    Key fix: penalize off-domain diversity. If the task has a known type
+    and the current team already has strong task affinity, cross-domain
+    diversity should NOT outweigh relevance.  We scale the diversity bonus
+    by the candidate's affinity for the task type so that off-domain agents
+    (high diversity but zero relevance) don't crowd out specialists.
     """
     if not current_team:
         return 0.5  # Neutral for first selection
@@ -169,8 +179,24 @@ def _diversity_bonus(candidate: Agent, current_team: list[Agent]) -> float:
     }
     new_domains = candidate_domains - team_domains
     if not candidate_domains:
-        return 0.0
-    return len(new_domains) / len(candidate_domains)
+        raw_diversity = 0.0
+    else:
+        raw_diversity = len(new_domains) / len(candidate_domains)
+
+    # Scale by task relevance: an off-domain agent's diversity bonus is
+    # dampened in proportion to how irrelevant it is for this task.
+    # Agents below the affinity floor get near-zero diversity credit, preventing
+    # code specialists from joining math teams based purely on "diverse" skills.
+    if task_type:
+        task_affinity = candidate.profile.skill_memory.get(task_type, 0.2)
+        # Hard gate: below 0.3 affinity, diversity contributes almost nothing.
+        # This ensures domain specialists always outrank off-domain generalists.
+        if task_affinity < 0.3:
+            return raw_diversity * 0.1
+        # Above threshold: linearly scale from 0.3→0.5 affinity
+        relevance_scale = min(1.0, (task_affinity - 0.3) / 0.2)
+        return raw_diversity * relevance_scale
+    return raw_diversity
 
 
 def _collab_score(
