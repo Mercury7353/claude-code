@@ -496,13 +496,20 @@ class TeamLeader:
         results: list[SubtaskResult] = []
         accumulated_context = ""
 
+        # For code tasks where all agents are "primary", don't pass context between agents
+        # so each generates an independent solution (avoids copy-cat behavior).
+        domain = task.get("domain", "")
+        task_type = task.get("type", "")
+        is_code_task = domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion")
+        all_primary = is_code_task and all(a.role == "primary" for a in assignments)
+
         for assignment in assignments:
             agent = agent_map.get(assignment.agent_id)
             if agent is None:
                 continue
 
-            # Inject accumulated context from prior subtasks
-            context = accumulated_context
+            # For independent code generation, skip accumulated context
+            context = "" if all_primary else accumulated_context
             response = agent.execute_subtask(
                 task=task,
                 subtask_prompt=assignment.subtask_prompt,
@@ -516,8 +523,9 @@ class TeamLeader:
                 response=response.get("response", ""),
             )
             results.append(result)
-            # Accumulate context for subsequent agents
-            accumulated_context += f"\n[{assignment.role} by {assignment.agent_id}]: {result.response[:300]}"
+            # Accumulate context for subsequent agents (only non-code tasks)
+            if not all_primary:
+                accumulated_context += f"\n[{assignment.role} by {assignment.agent_id}]: {result.response[:300]}"
 
         return results
 
