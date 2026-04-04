@@ -198,12 +198,12 @@ def try_fork(
         history_tasks = agent.profile.task_history[-FORK_DIVERGENCE_TASKS:]
         tasks_a = [t for t in history_tasks if t.get("type") == type_a][-2:]
         tasks_b = [t for t in history_tasks if t.get("type") == type_b][-2:]
-        cur_emb = embed(current_task.get("prompt", "") + " " + current_task.get("type", ""))
+        cur_emb = embed(current_task.get("prompt", ""))
 
         def avg_sim_to_group(group_tasks):
             if not group_tasks:
                 return 0.0
-            sims = [cosine_sim(cur_emb, embed(t.get("prompt", "") + " " + t.get("type", "")))
+            sims = [cosine_sim(cur_emb, embed(t.get("prompt", "")))
                     for t in group_tasks]
             return sum(sims) / len(sims)
 

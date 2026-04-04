@@ -49,6 +49,11 @@ def _tokenize(text: str) -> list[str]:
     return [t for t in tokens if t not in _STOP]
 
 
+def embed_task(task: dict) -> dict[str, float]:
+    """Embed a task dict using ONLY its raw prompt text (oracle-free)."""
+    return embed(task.get("prompt", ""))
+
+
 def embed(text: str) -> dict[str, float]:
     """
     Return a TF-IDF-style sparse embedding as a dict {term: weight}.
@@ -84,8 +89,8 @@ def task_distance(task_a: dict, task_b: dict) -> float:
     Semantic distance between two tasks (0=identical, 1=orthogonal).
     Uses the task's prompt text as the embedding source.
     """
-    text_a = task_a.get("prompt", "") + " " + task_a.get("type", "")
-    text_b = task_b.get("prompt", "") + " " + task_b.get("type", "")
+    text_a = task_a.get("prompt", "")
+    text_b = task_b.get("prompt", "")
     sim = cosine_sim(embed(text_a), embed(text_b))
     return 1.0 - sim
 
@@ -106,10 +111,10 @@ def is_domain_shift(
     if len(recent_tasks) < min_recent:
         return False  # Not enough history to judge
 
-    cur_emb = embed(current_task.get("prompt", "") + " " + current_task.get("type", ""))
+    cur_emb = embed(current_task.get("prompt", ""))  # oracle-free: prompt only
     sims = []
     for t in recent_tasks[-min_recent:]:
-        t_emb = embed(t.get("prompt", "") + " " + t.get("type", ""))
+        t_emb = embed(t.get("prompt", ""))
         sims.append(cosine_sim(cur_emb, t_emb))
 
     avg_sim = sum(sims) / len(sims)
@@ -122,7 +127,7 @@ def tasks_related(task_a: dict, task_b: dict, threshold: float = 0.25) -> bool:
     Replaces the hardcoded _DOMAIN_CLUSTERS dict.
     threshold: cosine similarity above which tasks are considered related.
     """
-    text_a = task_a.get("prompt", "") + " " + task_a.get("type", "")
-    text_b = task_b.get("prompt", "") + " " + task_b.get("type", "")
+    text_a = task_a.get("prompt", "")
+    text_b = task_b.get("prompt", "")
     sim = cosine_sim(embed(text_a), embed(text_b))
     return sim >= threshold
