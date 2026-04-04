@@ -875,6 +875,23 @@ class TeamLeader:
                             error_msgs.append(f"Test: {str(tc)[:100]}\nError: {str(_e)[:200]}\n{''.join(_tb)[:200]}")
                             if len(error_msgs) >= 2:
                                 break
+                    # HumanEval: test_cases is empty; use check() for error feedback
+                    test_str = task.get("test", "")
+                    if not error_msgs and test_str and entry_point:
+                        try:
+                            _g2: dict = {}
+                            exec(current_code, _g2)
+                            exec(test_str, _g2)
+                            _fn = _g2.get(entry_point) or next(
+                                (v for k, v in _g2.items()
+                                 if callable(v) and k not in ("check", "METADATA") and not k.startswith("_")),
+                                None,
+                            )
+                            if _fn and "check" in _g2:
+                                _g2["check"](_fn)
+                        except Exception as _e:
+                            _tb = _traceback.format_exc().splitlines()[-3:]
+                            error_msgs.append(f"Test failed: {str(_e)[:200]}\n{''.join(_tb)[:200]}")
                     error_section = ""
                     if error_msgs:
                         error_section = "\nExecution errors:\n" + "\n---\n".join(error_msgs[:2]) + "\n"
