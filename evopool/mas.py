@@ -457,6 +457,21 @@ class TeamLeader:
             if ep:
                 subtask_prompt = f"[REQUIRED FUNCTION NAME: {ep}]\n\n" + subtask_prompt
 
+        is_code = domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion")
+        if is_code:
+            # For code tasks: ALL agents generate independent solutions (not reviews).
+            # Reviewer agents given "review nothing" prompts waste their generation.
+            # _pick_best_code tests all solutions; best one wins.
+            assignments = []
+            for agent in team:
+                assignments.append(SubtaskAssignment(
+                    agent_id=agent.agent_id,
+                    role="primary",
+                    subtask_prompt=subtask_prompt,
+                    required_skills=[task_type],
+                ))
+            return assignments
+
         assignments = [SubtaskAssignment(
             agent_id=primary.agent_id,
             role="primary",
@@ -740,7 +755,35 @@ class TeamLeader:
 
         # Sort: test score desc, syntax ok desc, primary first
         candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
-        return candidates[0][3]
+        best_score, _, _, best_code_resp = candidates[0]
+
+        # If best code doesn't pass all tests, attempt one LLM-based fix pass
+        if best_score < 1.0 and entry_point:
+            try:
+                best_code = best_code_resp.split("```python")[1].split("```")[0].strip() if "```python" in best_code_resp else best_code_resp
+                fix_prompt = (
+                    f"Task: {task.get('prompt', '')[:400]}\n"
+                    f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n"
+                    f"The following code is incorrect or incomplete:\n```python\n{best_code[:800]}\n```\n\n"
+                    "Fix all bugs and produce the complete, correct Python function. "
+                    "Output ONLY a markdown code block: ```python\n...\n```"
+                )
+                fixed_raw = llm_call(
+                    model=self.backbone_llm,
+                    system="You are an expert Python programmer. Fix the code.",
+                    user=fix_prompt,
+                    max_tokens=512,
+                )
+                fixed_code = _extract_code(fixed_raw)
+                if fixed_code:
+                    fixed_code = _sanitize_function_name(fixed_code, entry_point, task.get("prompt", ""))
+                    fixed_score = _test_score(fixed_code, task)
+                    if fixed_score > best_score:
+                        return f"```python\n{fixed_code}\n```"
+            except Exception:
+                pass
+
+        return best_code_resp
 
     def _generate_feedback(
         self, task: dict, all_results: list[SubtaskResult]
