@@ -133,8 +133,9 @@ class Agent:
         if is_code_task and not is_review:
             subtask_prompt = (
                 subtask_prompt
-                + "\n\nIMPORTANT: Output ONLY the Python function implementation "
-                "in a markdown code block (```python ... ```) with no explanation outside the block."
+                + "\n\nIMPORTANT: Output ONLY the complete Python function implementation "
+                "in a markdown code block (```python ... ```) with no explanation outside the block. "
+                "Use the EXACT function name shown in the test cases or function signature."
             )
         user_prompt = subtask_prompt
         if context:
