@@ -103,14 +103,18 @@ def main():
                 domain_scores[domain] = []
             domain_scores[domain].append(score)
 
-            results_per_task.append({
+            task_record: dict = {
                 "task_index": i,
                 "task_id": task.get("id"),
                 "task_type": task.get("type"),
                 "domain": domain,
                 "score": score,
                 "lifecycle_events": result.get("lifecycle_events", []),
-            })
+            }
+            # Store final_answer for code tasks to aid debugging
+            if domain in ("humaneval", "mbpp") and "final_answer" in result:
+                task_record["final_answer"] = result["final_answer"][:600] if result["final_answer"] else ""
+            results_per_task.append(task_record)
 
             if (i + 1) % 10 == 0:
                 recent_mean = sum(all_scores[-10:]) / 10

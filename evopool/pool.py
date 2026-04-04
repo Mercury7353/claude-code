@@ -267,7 +267,7 @@ class EvoPool:
 
         self.task_index += 1
 
-        return {
+        result_dict: dict = {
             "task_id": task.get("id", self.task_index),
             "team_score": team_score,
             "team_agent_ids": [a.agent_id for a in team],
@@ -278,6 +278,10 @@ class EvoPool:
             "lifecycle_events": [e.__dict__ for e in lifecycle_events_this_task],
             "metrics": metrics,
         }
+        # Include final_answer for code tasks (aids debugging)
+        if self.config.mas_mode == "leader" and task.get("domain") in ("humaneval", "mbpp"):
+            result_dict["final_answer"] = mas_result.final_answer if mas_result else ""
+        return result_dict
 
     # ------------------------------------------------------------------
     # Metrics
