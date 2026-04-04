@@ -108,6 +108,8 @@ class CoDreamSession:
 # Main Co-Dream entry point
 # ------------------------------------------------------------------
 
+_CODREAM_SUCCESS_THRESHOLD = 0.6  # Only run full Co-Dream on failures; brief on successes
+
 def run_codream(
     team: list[Agent],
     task: dict,
@@ -119,61 +121,50 @@ def run_codream(
     debate_rounds: int = 1,
 ) -> CoDreamSession | None:
     """
-    Run a full Co-Dream session for a team that just completed a task.
+    Score-gated Co-Dream session:
 
-    The four phases:
-      1. Reflect  — each agent articulates what was interesting/puzzling
-      2. Imagine  — agents propose "what if" extensions and new ideas
-      3. Debate   — agents challenge each other's imaginations
-      4. Crystallize — each agent privately distills a novel insight
+    - On FAILURE (team_score < threshold): run REFLECT + CRYSTALLIZE only.
+      Skips CONTRAST/IMAGINE/DEBATE — those 3 phases add ~10 LLM calls of noise
+      from the 8B model. The key signal (what went wrong, how to update skills)
+      is captured in REFLECT + CRYSTALLIZE alone.
 
-    Asymmetric mode (anti-homogenization):
-      In phases 2-4, Agent A engages DEEPLY with Agent B's ideas only in
-      B's strong domains. A doesn't absorb B's ideas in domains where B
-      is weak (that would spread noise, not signal).
+    - On SUCCESS (team_score >= threshold): run abbreviated REFLECT only
+      (log what went right for future reference, no skill updates needed).
+
+    This reduces LLM calls by ~70% vs the 5-phase pipeline and eliminates
+    the noise from IMAGINE/DEBATE on a weak 8B model.
+
+    Asymmetric mode (anti-homogenization) is preserved in CRYSTALLIZE:
+      Agent A incorporates insights from B only in B's strong domains.
     """
     if mode == "none" or len(team) < 2:
         return None
 
     task_id = str(task.get("id", "unknown"))
+    task_domain = task.get("domain", task.get("type", ""))
     session = CoDreamSession(task_id=task_id, team_ids=[a.agent_id for a in team])
 
-    # Build shared context (brief, not full task text)
+    # Compute team score to decide which path to take
+    scores = {aid: r.get("score", 0.0) for aid, r in task_results.items()}
+    team_score = sum(scores.values()) / max(len(scores), 1) if scores else 0.0
+
+    # Build shared context
     task_context = _build_task_context(task, task_results)
 
-    # --- Phase 1: REFLECT ---
+    # --- Phase 1: REFLECT (always) ---
     reflections = _phase_reflect(team, task_context, task_results, backbone_llm)
     session.reflections = reflections
 
-    # --- Phase 2: CONTRAST (MemCollab-inspired) ---
-    # Each agent compares their approach to the best performer's to extract deltas.
-    # Unlike MemCollab's shared memory, these insights stay PRIVATE to each agent.
-    contrasts = _phase_contrast(team, task_results, task_context, reflections, backbone_llm)
-    session.contrasts = contrasts
+    if team_score >= _CODREAM_SUCCESS_THRESHOLD:
+        # Success path: just log reflections, no skill updates
+        # (agents are doing well — don't disturb their profiles)
+        return session
 
-    # --- Phase 3: IMAGINE (grounded by contrast deltas) ---
-    imaginations = _phase_imagine(team, reflections, contrasts, task_context, backbone_llm)
-    session.imaginations = imaginations
-
-    # --- Phase 4: DEBATE ---
-    if debate_rounds > 0:
-        debates = _phase_debate(
-            team=team,
-            imaginations=imaginations,
-            task_context=task_context,
-            backbone_llm=backbone_llm,
-            mode=mode,
-            strength_threshold=strength_threshold,
-        )
-        session.debates = debates
-    else:
-        debates = []
-
-    # --- Phase 5: CRYSTALLIZE ---
-    insights = _phase_crystallize(
+    # Failure path: CRYSTALLIZE directly from reflections
+    # (skip CONTRAST/IMAGINE/DEBATE — too noisy on 8B for failure analysis)
+    insights = _phase_crystallize_from_reflections(
         team=team,
-        imaginations=imaginations,
-        debates=debates,
+        reflections=reflections,
         task_context=task_context,
         backbone_llm=backbone_llm,
         mode=mode,
@@ -181,11 +172,85 @@ def run_codream(
     )
     session.insights = insights
 
-    # Apply insights to agent profiles (domain-constrained to prevent cross-domain corruption)
-    task_domain = task.get("domain", task.get("type", ""))
+    # Apply insights (domain-constrained)
     _apply_insights(team, insights, task_domain=task_domain)
 
     return session
+
+
+def _phase_crystallize_from_reflections(
+    team: list[Agent],
+    reflections: list[Reflection],
+    task_context: str,
+    backbone_llm: str,
+    mode: str,
+    strength_threshold: float,
+) -> list[CrystallizedInsight]:
+    """
+    Simplified crystallize: distill insights directly from reflections,
+    without the intermediate CONTRAST/IMAGINE/DEBATE phases.
+
+    Each agent sees: their own reflection + reflections from stronger peers
+    (same asymmetric rule as before). Asks: what ONE strategy update do you
+    take away from this failure and your teammates' observations?
+    """
+    insights: list[CrystallizedInsight] = []
+    reflection_map = {r.agent_id: r for r in reflections}
+
+    for agent in team:
+        my_reflection = reflection_map.get(agent.agent_id)
+        if not my_reflection:
+            continue
+
+        # Gather peer reflections (asymmetric: from stronger-in-domain peers only)
+        peer_material: list[str] = []
+        for other in team:
+            if other.agent_id == agent.agent_id:
+                continue
+            peer_refl = reflection_map.get(other.agent_id)
+            if not peer_refl:
+                continue
+            if mode == "asymmetric":
+                # Only learn from peers stronger in some domain
+                stronger_in = [
+                    d for d in other.profile.skill_memory
+                    if other.profile.skill_memory.get(d, 0.0) >= strength_threshold
+                    and other.profile.skill_memory.get(d, 0.0) > agent.profile.skill_memory.get(d, 0.0)
+                ]
+                if not stronger_in:
+                    continue
+            peer_material.append(f"Teammate {other.agent_id[:6]}: {peer_refl.content}")
+
+        prompt = (
+            f"You are {agent.profile.persona}\n"
+            f"Your current skills: {agent.profile.skill_memory}\n\n"
+            f"Task context (you FAILED this): {task_context}\n\n"
+            f"Your reflection: {my_reflection.content}\n\n"
+            + (f"Peer observations:\n" + "\n".join(peer_material) + "\n\n" if peer_material else "")
+            + "Based on this failure and your team's observations, what is ONE concrete strategy "
+            "update you are taking away?\n\n"
+            "Respond with JSON:\n"
+            "{\n"
+            '  "insight": "one concrete lesson (2 sentences max)",\n'
+            '  "affected_domains": ["domain1"],\n'
+            '  "skill_updates": {"domain1": 0.05},\n'
+            '  "new_hypotheses": ["hypothesis"]\n'
+            "}"
+        )
+        try:
+            raw = llm_call(model=backbone_llm, user=prompt, max_tokens=250)
+            data = json.loads(raw.strip())
+            insights.append(CrystallizedInsight(
+                agent_id=agent.agent_id,
+                insight=data.get("insight", ""),
+                affected_domains=data.get("affected_domains", []),
+                skill_updates=data.get("skill_updates", {}),
+                new_hypotheses=data.get("new_hypotheses", []),
+            ))
+        except Exception:
+            pass
+
+    return insights
 
 
 # ------------------------------------------------------------------
@@ -644,16 +709,25 @@ _DOMAIN_CLUSTERS = {
 
 def _domains_related(update_domain: str, task_domain: str) -> bool:
     """
-    Return True if update_domain belongs to the same cluster as task_domain.
-    If either domain is not found in any cluster, allow the update (conservative).
+    Return True if update_domain is semantically related to task_domain.
+    Uses both the legacy hardcoded cluster map (fast) and semantic embedding
+    similarity (oracle-free, generalizable) as a fallback.
     """
     update_d = update_domain.lower().replace("-", "_").replace(" ", "_")
     task_d = task_domain.lower().replace("-", "_").replace(" ", "_")
+
+    # Fast path: check hardcoded cluster map first
     for cluster in _DOMAIN_CLUSTERS.values():
         if task_d in cluster:
-            # task domain found — only allow updates within same cluster
             return update_d in cluster or update_d == task_d
-    return True  # task domain not in any cluster → allow all updates
+
+    # Slow path: semantic embedding similarity (for unknown domains)
+    try:
+        from .task_embed import embed, cosine_sim
+        sim = cosine_sim(embed(update_d), embed(task_d))
+        return sim >= 0.20
+    except Exception:
+        return True  # conservative fallback
 
 
 # ------------------------------------------------------------------

@@ -66,6 +66,9 @@ def check_and_apply_lifecycle(
     n_min: int = 5,
     n_max: int = 50,
     current_task_type: str = "",
+    current_task: dict | None = None,
+    recent_tasks: list[dict] | None = None,
+    domain_shift: bool = False,
 ) -> tuple[list[Agent], list[LifecycleEvent]]:
     """
     Check all lifecycle conditions and apply operators as needed.
@@ -95,14 +98,18 @@ def check_and_apply_lifecycle(
         pool, merge_events = try_merge_pool(pool, task_index, backbone_llm)
         events.extend(merge_events)
 
-    # Fork (increases pool size) — snapshot pool first to avoid mutation-during-iteration
-    if len(pool) < n_max:
+    # Fork (increases pool size) — skip entirely during domain shifts to prevent
+    # catastrophic forgetting (newly forked agents have no expertise in the new domain)
+    if len(pool) < n_max and not domain_shift:
         forked_agents = []
         forked_parent_ids: set[str] = set()
         for agent in list(pool):  # iterate over snapshot
             if len(pool) - len(forked_parent_ids) + len(forked_agents) >= n_max:
                 break
-            new_agents, event = try_fork(agent, task_index, backbone_llm, current_task_type)
+            new_agents, event = try_fork(
+                agent, task_index, backbone_llm, current_task_type,
+                current_task=current_task, recent_tasks=recent_tasks,
+            )
             if event:
                 events.append(event)
                 forked_agents.extend(new_agents)
@@ -143,29 +150,29 @@ def try_fork(
     task_index: int,
     backbone_llm: str,
     current_task_type: str = "",
+    current_task: dict | None = None,
+    recent_tasks: list[dict] | None = None,
 ) -> tuple[list[Agent], LifecycleEvent | None]:
     """
     Fork an agent if its task history is sufficiently divergent.
-    Creates two child agents with diverged profiles.
+    Uses semantic task embeddings (not oracle domain strings) for all guards.
 
-    Domain-boundary guard: if the current task type only appeared very recently
-    (i.e. we just entered a new domain), suppress fork. Forking at domain
-    boundaries replaces experienced agents with untrained children right when
-    domain expertise is most needed (causing catastrophic forgetting).
+    Domain-boundary guard: if the current task is semantically far from the
+    agent's recent task history, we just domain-shifted — suppress fork to
+    avoid replacing experienced agents with untrained children.
     """
     from .agent import Agent as AgentClass, AgentProfile
+    from .task_embed import is_domain_shift, tasks_related, cosine_sim, embed
 
     task_types = [t["type"] for t in agent.profile.task_history[-FORK_DIVERGENCE_TASKS:]]
     if len(task_types) < FORK_DIVERGENCE_TASKS:
         return [], None
 
-    # Domain-boundary guard: if current task type appeared only in the last
-    # FORK_DOMAIN_COOLDOWN tasks, we just transitioned domains — suppress fork
-    if current_task_type:
-        recent_types = task_types[-FORK_DOMAIN_COOLDOWN:]
-        older_types = task_types[:-FORK_DOMAIN_COOLDOWN]
-        if current_task_type in recent_types and current_task_type not in older_types:
-            return [], None  # suppress: current domain is brand-new, don't disrupt
+    # Semantic domain-shift guard: if current task is far from agent's recent
+    # task history, suppress fork (domain transition is happening)
+    if current_task and recent_tasks and len(recent_tasks) >= 3:
+        if is_domain_shift(current_task, recent_tasks[-6:], threshold=0.65, min_recent=3):
+            return [], None  # suppress: just entered a new domain
 
     # Compute distribution entropy over recent task types
     type_counts: dict[str, int] = {}
@@ -183,11 +190,27 @@ def try_fork(
 
     type_a, type_b = top_types[0][0], top_types[1][0]
 
-    # Additional guard: if neither fork type matches the current task type,
-    # the divergence is based on stale history — suppress to avoid disrupting
-    # current-domain performance
-    if current_task_type and current_task_type not in (type_a, type_b):
-        return [], None
+    # Semantic relevance guard: only fork if current task is semantically
+    # similar to at least one of the two divergent task types in the agent's
+    # history (prevents forking based on stale cross-domain patterns)
+    if current_task:
+        # Get representative tasks for each type from agent history
+        history_tasks = agent.profile.task_history[-FORK_DIVERGENCE_TASKS:]
+        tasks_a = [t for t in history_tasks if t.get("type") == type_a][-2:]
+        tasks_b = [t for t in history_tasks if t.get("type") == type_b][-2:]
+        cur_emb = embed(current_task.get("prompt", "") + " " + current_task.get("type", ""))
+
+        def avg_sim_to_group(group_tasks):
+            if not group_tasks:
+                return 0.0
+            sims = [cosine_sim(cur_emb, embed(t.get("prompt", "") + " " + t.get("type", "")))
+                    for t in group_tasks]
+            return sum(sims) / len(sims)
+
+        sim_a = avg_sim_to_group(tasks_a)
+        sim_b = avg_sim_to_group(tasks_b)
+        if max(sim_a, sim_b) < 0.15:
+            return [], None  # current task unrelated to both fork types — stale signal
 
     # Create two child profiles
     child_a = AgentClass(

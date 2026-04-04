@@ -58,6 +58,7 @@ class EvoPool:
         self.collab_table = CollabScoreTable()
         self.task_index: int = 0
         self.recent_task_types: list[str] = []
+        self.recent_tasks: list[dict] = []  # full task dicts for embedding-based detection
         self.lifecycle_events: list[LifecycleEvent] = []
         self.metrics_log: list[dict] = []
 
@@ -165,13 +166,21 @@ class EvoPool:
         if self.config.collab_score_enabled:
             self.collab_table.record_team_result(team, team_score)
 
-        # 7. Track task type
+        # 7. Track task type and full task for embedding-based domain detection
         task_type = task.get("type", "general")
         self.recent_task_types.append(task_type)
+        self.recent_tasks.append(task)
+        if len(self.recent_tasks) > 20:
+            self.recent_tasks = self.recent_tasks[-20:]
 
-        # 8. Lifecycle check
+        # 8. Lifecycle check — with semantic domain-shift detection
         lifecycle_events_this_task = []
         if self.config.lifecycle_enabled and self.task_index % LIFECYCLE_CHECK_INTERVAL == 0:
+            from .task_embed import is_domain_shift
+            domain_shift = is_domain_shift(
+                task, self.recent_tasks[:-1], threshold=0.65, min_recent=3
+            ) if len(self.recent_tasks) > 3 else False
+
             self.pool, lifecycle_events_this_task = check_and_apply_lifecycle(
                 pool=self.pool,
                 task_index=self.task_index,
@@ -181,6 +190,9 @@ class EvoPool:
                 n_min=self.config.pool_size_min,
                 n_max=self.config.pool_size_max,
                 current_task_type=task_type,
+                current_task=task,
+                recent_tasks=self.recent_tasks[:-1],
+                domain_shift=domain_shift,
             )
             self.lifecycle_events.extend(lifecycle_events_this_task)
 
