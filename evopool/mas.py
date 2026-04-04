@@ -904,6 +904,11 @@ class TeamLeader:
                 except Exception:
                     break
 
+        # Return current_code_resp (may be partially improved by fix passes)
+        # vs best_code_resp (original best from 3-agent voting before fix passes).
+        # If fix pass improved the score (even partially), current_code_resp is better.
+        if best_score < 1.0 and entry_point:
+            return current_code_resp
         return best_code_resp
 
     def _generate_feedback(
