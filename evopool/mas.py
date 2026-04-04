@@ -608,6 +608,22 @@ class TeamLeader:
                 return stripped
             return ""
 
+        def _sanitize_function_name(code: str, entry_point: str) -> str:
+            """Rename the first top-level function to entry_point if it has a different name."""
+            if not entry_point or not code:
+                return code
+            # Check if entry_point already exists in code
+            if _re.search(r"\bdef\s+" + _re.escape(entry_point) + r"\s*\(", code):
+                return code
+            # Find the first top-level function definition and rename it
+            renamed = _re.sub(
+                r"(def\s+)(\w+)(\s*\()",
+                lambda m: m.group(1) + entry_point + m.group(3),
+                code,
+                count=1,
+            )
+            return renamed
+
         def _test_score(code: str, task: dict) -> float:
             import signal as _signal
 
@@ -669,6 +685,7 @@ class TeamLeader:
             except SyntaxError:
                 return False
 
+        entry_point = task.get("entry_point", "")
         candidates = []
         for r in all_results:
             if r.role in ("reviewer", "critic"):
@@ -676,6 +693,9 @@ class TeamLeader:
             code = _extract_code(r.response)
             if not code:
                 continue
+            # Sanitize function name to match entry_point (critical for HumanEval)
+            if entry_point:
+                code = _sanitize_function_name(code, entry_point)
             score = _test_score(code, task)
             syn = _syntax_ok(code)
             priority = 1 if r.role == "primary" else 0
