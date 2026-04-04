@@ -595,8 +595,19 @@ class TeamLeader:
                     exec(test_str, g)
                     if entry_point in g:
                         g["check"](g[entry_point])
-                    _signal.alarm(0)
-                    return 1.0
+                        _signal.alarm(0)
+                        return 1.0
+                    else:
+                        # Try callable fallback (function with wrong name)
+                        candidates = [v for k, v in g.items()
+                                      if callable(v) and k not in ("check", "METADATA")
+                                      and not k.startswith("_")]
+                        if candidates and "check" in g:
+                            g["check"](candidates[0])
+                            _signal.alarm(0)
+                            return 1.0
+                        _signal.alarm(0)
+                        return 0.0  # entry point not found
                 except Exception:
                     _signal.alarm(0)
                     return 0.0
