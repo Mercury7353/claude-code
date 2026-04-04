@@ -208,17 +208,17 @@ class TeamLeader:
                     answer_votes[key] = []
                 answer_votes[key].append(r.agent_id)
 
-        # Pick majority answer; tie → primary agent (leader)
-        best_answer = ""
+        # Pick majority answer; tie-break by preferring the leader's response
         best_response = results[0].response
         if answer_votes:
             best_key = max(answer_votes.keys(), key=lambda k: len(answer_votes[k]))
-            # Find the response from the majority group that belongs to the leader
             majority_ids = set(answer_votes[best_key])
-            for r in results:
-                if r.agent_id in majority_ids:
-                    best_response = r.response
-                    break
+            # Prefer leader's response if leader is in majority; else pick first majority member
+            leader_r = next((r for r in results if r.agent_id == self.leader.agent_id
+                             and r.agent_id in majority_ids), None)
+            best_response = leader_r.response if leader_r else next(
+                (r.response for r in results if r.agent_id in majority_ids), results[0].response
+            )
 
         return MASResult(
             final_answer=best_response,
@@ -275,15 +275,16 @@ class TeamLeader:
                     answer_votes[ans] = []
                 answer_votes[ans].append(r.agent_id)
 
-        # Pick majority answer; tie → leader's response
+        # Pick majority answer; tie-break by preferring the leader's response
         best_response = results[0].response
         if answer_votes:
             best_key = max(answer_votes.keys(), key=lambda k: len(answer_votes[k]))
             majority_ids = set(answer_votes[best_key])
-            for r in results:
-                if r.agent_id in majority_ids:
-                    best_response = r.response
-                    break
+            leader_r = next((r for r in results if r.agent_id == self.leader.agent_id
+                             and r.agent_id in majority_ids), None)
+            best_response = leader_r.response if leader_r else next(
+                (r.response for r in results if r.agent_id in majority_ids), results[0].response
+            )
 
         return MASResult(
             final_answer=best_response,
