@@ -199,11 +199,18 @@ class Agent:
         score = outcome.get("score", 0.5)
 
         # Update skill memory with adaptive learning rate.
-        # Use faster updates early (few observations) and slower updates later
-        # to prevent rapid convergence and preserve specialization.
+        # Use faster updates early (few observations) and slower updates later.
+        # Guard: agents with specialist priors (skill > 0.5) treat prior as if
+        # they have 2 prior observations, preventing a single failure from
+        # collapsing their specialization before they have real experience.
         n_obs = len(self.profile.perf_stats.get(task_type, []))
-        alpha = max(0.1, 0.6 / (1 + n_obs * 0.3))  # starts at 0.6, decays toward 0.1
         prev = self.profile.skill_memory.get(task_type, 0.5)
+        # Virtual observations for specialist priors
+        if n_obs == 0 and prev > 0.4:
+            n_obs_eff = 2  # treat specialist prior as 2 prior observations
+        else:
+            n_obs_eff = n_obs
+        alpha = max(0.1, 0.6 / (1 + n_obs_eff * 0.3))  # starts at 0.42 for specialists
         self.profile.skill_memory[task_type] = (1 - alpha) * prev + alpha * score
 
         # Update performance stats
