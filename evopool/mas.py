@@ -208,9 +208,12 @@ class TeamLeader:
                     answer_votes[key] = []
                 answer_votes[key].append(r.agent_id)
 
-        # Pick majority answer; tie-break by preferring the leader's response
+        # Pick majority answer; if no majority (all different), use LLM judge to pick best
         best_response = results[0].response
-        if answer_votes:
+        max_votes = max((len(v) for v in answer_votes.values()), default=0)
+        has_majority = max_votes >= 2  # at least 2 agents agree
+
+        if answer_votes and has_majority:
             best_key = max(answer_votes.keys(), key=lambda k: len(answer_votes[k]))
             majority_ids = set(answer_votes[best_key])
             # Prefer leader's response if leader is in majority; else pick first majority member
@@ -219,6 +222,31 @@ class TeamLeader:
             best_response = leader_r.response if leader_r else next(
                 (r.response for r in results if r.agent_id in majority_ids), results[0].response
             )
+        elif len(results) > 1:
+            # No majority: use LLM to judge which solution is most rigorous
+            # Truncate solutions to 600 chars to stay within context
+            sol_texts = "\n\n".join(
+                f"Solution {chr(65+i)}:\n{r.response[:600]}"
+                for i, r in enumerate(results)
+            )
+            judge_prompt = (
+                f"Problem: {task.get('prompt', '')[:400]}\n\n"
+                f"{sol_texts}\n\n"
+                "Which solution shows the most rigorous and correct reasoning? "
+                "Reply with ONLY the letter (A, B, or C)."
+            )
+            try:
+                pick = llm_call(
+                    model=self.backbone_llm,
+                    system="You are a math judge. Pick the best solution.",
+                    user=judge_prompt,
+                    max_tokens=10,
+                ).strip().upper()
+                idx = ord(pick[0]) - ord('A') if pick and pick[0].isalpha() else 0
+                idx = max(0, min(idx, len(results) - 1))
+                best_response = results[idx].response
+            except Exception:
+                best_response = self.leader.execute_task(task, self.backbone_llm).get("response", results[0].response)
 
         return MASResult(
             final_answer=best_response,
