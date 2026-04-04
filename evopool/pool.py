@@ -122,6 +122,13 @@ class EvoPool:
             # Add recruited agents to team for profile updates and Co-Dream
             recruited_agents = [a for a in self.pool if a.agent_id in extra_recruited]
             team = team + recruited_agents
+            # Include synthesized answer in evaluation (may be better than individual responses)
+            if mas_result.final_answer:
+                responses["__synthesized__"] = {
+                    "agent_id": "__synthesized__",
+                    "response": mas_result.final_answer,
+                    "task_type": task.get("type", "unknown"),
+                }
         else:
             # flat mode: each agent independently answers
             responses = {}
