@@ -748,7 +748,14 @@ class TeamLeader:
             except SyntaxError:
                 return False
 
-        entry_point = task.get("entry_point", "")
+        entry_point = task.get("entry_point") or ""
+        if not entry_point:
+            # MBPP: entry_point is None in task dict; extract from test_cases
+            for tc in (task.get("test_cases") or []):
+                _m = _re.search(r"assert\s+(\w+)\s*\(", str(tc))
+                if _m:
+                    entry_point = _m.group(1)
+                    break
         candidates = []
         for r in all_results:
             if r.role in ("reviewer", "critic"):
@@ -756,7 +763,7 @@ class TeamLeader:
             code = _extract_code(r.response)
             if not code:
                 continue
-            # Sanitize function name to match entry_point (critical for HumanEval)
+            # Sanitize function name to match entry_point (critical for MBPP/HumanEval)
             if entry_point:
                 code = _sanitize_function_name(code, entry_point, task.get("prompt", ""))
             score = _test_score(code, task)
