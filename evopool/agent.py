@@ -138,6 +138,9 @@ class Agent:
         )
         # Only add code format instruction for primary agents, not reviewers
         is_review = "Review the team's work" in subtask_prompt or "identify issues" in subtask_prompt
+        # Override system prompt for code tasks: profile persona is too generic for coding
+        if is_code_task and not is_review:
+            system_prompt = "You are an expert Python programmer. Write clean, correct, and efficient code."
         if is_code_task and not is_review:
             subtask_prompt = (
                 subtask_prompt
