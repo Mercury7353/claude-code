@@ -300,7 +300,12 @@ class AFlowEvaluator:
 
     def _evaluate_code(self, task: dict, response: str) -> float:
         """Try to execute code and check test cases."""
+        import re as _re
         domain = task.get("domain", "")
+
+        # Strip Qwen3-8B thinking tokens first — models often include Python examples
+        # inside <think>...</think> which confuse the code block extraction below.
+        response = _re.sub(r"<think>.*?</think>", "", response, flags=_re.DOTALL).strip()
 
         # Extract code block from response
         code = response

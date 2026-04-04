@@ -842,11 +842,14 @@ class TeamLeader:
             candidates.append((score, syn, priority, sanitized_response))
 
         if not candidates:
-            # fallback: primary or first
+            # fallback: strip thinking tokens so the evaluator isn't confused by examples
+            # inside <think>...</think> that contain Python code snippets.
             for r in all_results:
                 if r.role == "primary":
-                    return r.response
-            return all_results[0].response if all_results else ""
+                    stripped = _re.sub(r"<think>.*?</think>", "", r.response, flags=_re.DOTALL).strip()
+                    return stripped if stripped else r.response
+            fallback = all_results[0].response if all_results else ""
+            return _re.sub(r"<think>.*?</think>", "", fallback, flags=_re.DOTALL).strip() or fallback
 
         # Sort: test score desc, syntax ok desc, primary first
         candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
