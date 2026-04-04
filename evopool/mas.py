@@ -741,14 +741,19 @@ class TeamLeader:
             # Check if entry_point already exists in code
             if _re.search(r"\bdef\s+" + _re.escape(entry_point) + r"\s*\(", code):
                 return code
-            # Find the first top-level function definition and rename it
-            renamed = _re.sub(
-                r"(def\s+)(\w+)(\s*\()",
-                lambda m: m.group(1) + entry_point + m.group(3),
-                code,
-                count=1,
-            )
-            return renamed
+            # Find ALL def statements; rename the LAST one (models define helpers first, main last).
+            # Also rename all call-site references to the old name → entry_point.
+            defs = list(_re.finditer(r"(def\s+)(\w+)(\s*\()", code))
+            if not defs:
+                return code
+            last = defs[-1]
+            old_name = last.group(2)
+            # Replace the def statement
+            new_code = code[:last.start()] + last.group(1) + entry_point + last.group(3) + code[last.end():]
+            # Rename all call-site references (but not other def names or unrelated identifiers)
+            if old_name != entry_point:
+                new_code = _re.sub(r"\b" + _re.escape(old_name) + r"\b", entry_point, new_code)
+            return new_code
 
         def _test_score(code: str, task: dict) -> float:
             import signal as _signal
