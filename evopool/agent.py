@@ -125,8 +125,15 @@ class Agent:
         """Execute an assigned subtask with injected context from other agents."""
         system_prompt = self.build_system_prompt()
         domain = task.get("domain", "")
-        is_code_task = domain in ("mbpp", "humaneval") or task.get("type", "") in (
+        task_type = task.get("type", "")
+        is_code_task = domain in ("mbpp", "humaneval") or task_type in (
             "code_generation", "code_completion"
+        )
+        is_math_task = domain in ("gsm8k", "math") or task_type in (
+            "math_word_problem", "math_competition", "arithmetic"
+        )
+        is_qa_task = domain in ("hotpotqa", "drop") or task_type in (
+            "multi_hop_qa", "reading_comprehension"
         )
         # Only add code format instruction for primary agents, not reviewers
         is_review = "Review the team's work" in subtask_prompt or "identify issues" in subtask_prompt
@@ -136,6 +143,22 @@ class Agent:
                 + "\n\nIMPORTANT: Output ONLY the complete Python function implementation "
                 "in a markdown code block (```python ... ```) with no explanation outside the block. "
                 "Use the EXACT function name shown in the test cases or function signature."
+            )
+        elif is_math_task and not is_review:
+            if domain == "gsm8k" or task_type == "math_word_problem":
+                subtask_prompt = (
+                    subtask_prompt
+                    + "\n\nSolve step by step. End your answer with: #### <final number>"
+                )
+            else:
+                subtask_prompt = (
+                    subtask_prompt
+                    + "\n\nSolve step by step. Box your final answer: \\boxed{<answer>}"
+                )
+        elif is_qa_task and not is_review:
+            subtask_prompt = (
+                subtask_prompt
+                + "\n\nProvide a concise, direct answer. Do not repeat the question."
             )
         user_prompt = subtask_prompt
         if context:
@@ -148,9 +171,16 @@ class Agent:
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 
     def execute_task(self, task: dict, backbone_llm: str) -> dict:
-        """Execute a task and return result dict."""
+        """Execute a task and return result dict (used by self-consistency math path)."""
         system_prompt = self.build_system_prompt()
         user_prompt = task.get("prompt", task.get("question", str(task)))
+        domain = task.get("domain", "")
+        task_type = task.get("type", "")
+        # Add format hint for math self-consistency
+        if domain == "gsm8k" or task_type == "math_word_problem":
+            user_prompt = user_prompt + "\n\nSolve step by step. End your answer with: #### <final number>"
+        elif task_type in ("math_competition", "arithmetic") or domain == "math":
+            user_prompt = user_prompt + "\n\nSolve step by step. Box your final answer: \\boxed{<answer>}"
 
         response = llm_call(
             model=backbone_llm,
