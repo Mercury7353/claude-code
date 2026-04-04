@@ -18,6 +18,7 @@ Available conditions:
   dylan                   DyLAN baseline (static pool + AIS)
   agentnet                AgentNet baseline (per-agent RAG memory)
   no_memory               No memory baseline (random selection, no profile update)
+  self_consistency        Self-Consistency (Wang et al. 2022): k=5 majority vote, no memory
 
 Available benchmarks:
   aflow_stream     6-domain sequential stream (GSM8K/HotpotQA/MBPP/MATH/HumanEval/DROP)
@@ -192,6 +193,14 @@ def _build_system(args):
         return AgentNetPool(
             pool_size=args.pool_size,
             team_size=args.team_size,
+            backbone_llm=args.backbone_llm,
+            seed=args.seed,
+        )
+
+    if condition == "self_consistency":
+        from evopool.baselines.self_consistency import SelfConsistencyPool
+        return SelfConsistencyPool(
+            k=5,
             backbone_llm=args.backbone_llm,
             seed=args.seed,
         )
