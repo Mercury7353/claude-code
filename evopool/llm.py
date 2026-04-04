@@ -7,6 +7,7 @@ Also supports local vLLM/Ollama servers.
 from __future__ import annotations
 
 import os
+import random
 import time
 from typing import Any
 
@@ -26,6 +27,20 @@ def load_server_info() -> dict | None:
     return None
 
 
+def _get_local_url() -> str:
+    """
+    Return a vLLM server URL for load balancing.
+    Checks EVOPOOL_LOCAL_LLM_URLS (comma-separated) first, then EVOPOOL_LOCAL_LLM_URL.
+    Picks randomly among available URLs for simple load balancing.
+    """
+    multi = os.environ.get("EVOPOOL_LOCAL_LLM_URLS", "")
+    if multi:
+        urls = [u.strip() for u in multi.split(",") if u.strip()]
+        if urls:
+            return random.choice(urls)
+    return os.environ.get("EVOPOOL_LOCAL_LLM_URL", "")
+
+
 def llm_call(
     model: str,
     user: str,
@@ -41,21 +56,22 @@ def llm_call(
     Falls back to a local vLLM endpoint if EVOPOOL_LOCAL_LLM_URL is set.
     """
     # Auto-detect vLLM server if no explicit URL set and model looks like a local one
-    if not os.environ.get("EVOPOOL_LOCAL_LLM_URL") and not model.startswith(("claude", "gpt-", "o1", "o3", "o4")):
+    if not os.environ.get("EVOPOOL_LOCAL_LLM_URL") and not os.environ.get("EVOPOOL_LOCAL_LLM_URLS") and not model.startswith(("claude", "gpt-", "o1", "o3", "o4")):
         server = load_server_info()
         if server:
             os.environ["EVOPOOL_LOCAL_LLM_URL"] = server["url"]
 
     for attempt in range(retry):
         try:
-            if os.environ.get("EVOPOOL_LOCAL_LLM_URL") and not model.startswith(("claude", "gpt-", "o1", "o3", "o4")):
-                return _call_local(model, user, system, max_tokens, temperature)
+            local_url = _get_local_url()
+            if local_url and not model.startswith(("claude", "gpt-", "o1", "o3", "o4")):
+                return _call_local(model, user, system, max_tokens, temperature, local_url)
             elif model.startswith("claude"):
                 return _call_anthropic(model, user, system, max_tokens, temperature)
             elif model.startswith(("gpt-", "o1", "o3", "o4")):
                 return _call_openai(model, user, system, max_tokens, temperature)
-            elif os.environ.get("EVOPOOL_LOCAL_LLM_URL"):
-                return _call_local(model, user, system, max_tokens, temperature)
+            elif local_url:
+                return _call_local(model, user, system, max_tokens, temperature, local_url)
             else:
                 return _call_anthropic(model, user, system, max_tokens, temperature)
         except Exception as e:
@@ -99,12 +115,13 @@ def _call_openai(model: str, user: str, system: str, max_tokens: int, temperatur
     return response.choices[0].message.content
 
 
-def _call_local(model: str, user: str, system: str, max_tokens: int, temperature: float) -> str:
+def _call_local(model: str, user: str, system: str, max_tokens: int, temperature: float, url: str = "") -> str:
     """Call a local vLLM/Ollama endpoint. Strips Qwen3 <think>...</think> tokens."""
     import re
     import requests
 
-    url = os.environ["EVOPOOL_LOCAL_LLM_URL"]
+    if not url:
+        url = _get_local_url() or os.environ.get("EVOPOOL_LOCAL_LLM_URL", "")
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
