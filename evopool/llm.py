@@ -121,4 +121,8 @@ def _call_local(model: str, user: str, system: str, max_tokens: int, temperature
     content = resp.json()["choices"][0]["message"]["content"]
     # Strip Qwen3 thinking tokens <think>...</think>
     content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    # Handle truncated thinking: if <think> was opened but never closed (token limit hit),
+    # strip from <think> onwards — the model never produced actual output.
+    if "<think>" in content:
+        content = content[:content.index("<think>")].strip()
     return content

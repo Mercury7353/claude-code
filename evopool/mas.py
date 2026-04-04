@@ -187,9 +187,14 @@ class TeamLeader:
         subtask_prompt = task.get("prompt", str(task))
         if entry_point:
             subtask_prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + subtask_prompt
+        # Instruct model to return code only (prevents extended thinking, matches AFlow behavior)
+        subtask_prompt += (
+            "\n\nReturn ONLY the complete, runnable Python code without explanations. "
+            "Write the function directly."
+        )
 
         # All agents generate code independently (no shared context)
-        # Use 1024 max_tokens for code: Qwen3 thinking uses ~500 tokens, leaving enough for code
+        # Use 2048 max_tokens: Qwen3 thinking can use ~1000 tokens, leaving enough for code
         results: list[SubtaskResult] = []
         for agent in self.team:
             resp = agent.execute_subtask(
@@ -197,7 +202,7 @@ class TeamLeader:
                 subtask_prompt=subtask_prompt,
                 context="",  # no context — independent generation
                 backbone_llm=self.backbone_llm,
-                max_tokens=1024,
+                max_tokens=2048,
             )
             results.append(SubtaskResult(
                 agent_id=agent.agent_id,
@@ -909,7 +914,7 @@ class TeamLeader:
                         model=self.backbone_llm,
                         system="You are an expert Python programmer. Fix the code based on the error messages.",
                         user=fix_prompt,
-                        max_tokens=1024,
+                        max_tokens=2048,
                     )
                     fixed_code = _extract_code(fixed_raw)
                     if fixed_code:
