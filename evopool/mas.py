@@ -699,7 +699,9 @@ class TeamLeader:
             score = _test_score(code, task)
             syn = _syntax_ok(code)
             priority = 1 if r.role == "primary" else 0
-            candidates.append((score, syn, priority, r.response))
+            # Store the sanitized code (not r.response) so the correct name is returned
+            sanitized_response = f"```python\n{code}\n```" if code else r.response
+            candidates.append((score, syn, priority, sanitized_response))
 
         if not candidates:
             # fallback: primary or first
