@@ -32,6 +32,37 @@ if _AFLOW_ROOT not in sys.path:
 _ops = None
 
 
+def _get_server_url() -> str:
+    """Pick a live vLLM server URL, respecting multi-server load balancing."""
+    import os, random, json as _json
+    # 1. EVOPOOL_LOCAL_LLM_URLS (comma-separated, set by experiment scripts)
+    multi = os.environ.get("EVOPOOL_LOCAL_LLM_URLS", "")
+    if multi:
+        urls = [u.strip() for u in multi.split(",") if u.strip()]
+        if urls:
+            return random.choice(urls)
+    # 2. EVOPOOL_LOCAL_LLM_URL (single URL)
+    single = os.environ.get("EVOPOOL_LOCAL_LLM_URL", "")
+    if single:
+        return single
+    # 3. vllm_server.json files
+    base = Path(__file__).parent.parent.parent
+    for fname in ["vllm_server.json", "vllm_server_2.json", "vllm_server_3.json"]:
+        p = base / fname
+        if p.exists():
+            try:
+                return _json.loads(p.read_text())["url"]
+            except Exception:
+                pass
+    return "http://10.217.117.45:8000"
+
+
+def _reset_ops():
+    """Force ops to re-initialize (pick a fresh server URL)."""
+    global _ops
+    _ops = None
+
+
 def _get_ops():
     global _ops
     if _ops is not None:
@@ -39,12 +70,12 @@ def _get_ops():
     from scripts.async_llm import AsyncLLM, LLMConfig
     from scripts.operators import Custom, ScEnsemble, Review, Revise, AnswerGenerate, CustomCodeGenerate
 
-    # vLLM config (async_llm.py already patches base_url, but pass explicit config)
+    url = _get_server_url()
     cfg = LLMConfig({
         "model": "qwen3-8b",
         "temperature": 0.7,
         "key": "no-key",
-        "base_url": "http://10.217.117.45:8000/v1",
+        "base_url": f"{url}/v1",
         "top_p": 1,
     })
     llm = AsyncLLM(cfg)
@@ -188,17 +219,20 @@ class AFlowPool:
         self.seed = seed
         self.task_index = 0
         self.metrics_log: list[dict] = []
-        self._ops = None  # lazy init
+        self._last_domain: str = ""  # reset ops on domain switch to pick fresh server
 
-    def _get_ops(self):
-        if self._ops is None:
-            self._ops = _get_ops()
-        return self._ops
+    def _get_ops(self, domain: str = ""):
+        # Re-initialize on domain switch — ensures we pick a live server URL
+        # (important for long runs where a server may expire mid-benchmark)
+        if domain != self._last_domain:
+            _reset_ops()
+            self._last_domain = domain
+        return _get_ops()
 
     def process_task(self, task: dict, evaluator: Callable) -> dict:
         domain = task.get("domain", task.get("type", "qa")).lower()
         category = _DOMAIN_TO_CATEGORY.get(domain, "qa")
-        ops = self._get_ops()
+        ops = self._get_ops(domain)
 
         # Bridge async → sync
         try:
