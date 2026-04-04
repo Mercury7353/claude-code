@@ -332,12 +332,25 @@ class TeamLeader:
             if agent is None:
                 continue
 
-            critique_prompt = (
-                f"Original task: {task.get('prompt', '')[:400]}\n\n"
-                f"Team's work so far:\n{r1_summary}\n\n"
-                "As a reviewer, identify the most important improvement or correction. "
-                "Be specific and constructive. Focus on correctness over style."
-            )
+            domain = task.get("domain", "")
+            is_code = domain in ("mbpp", "humaneval") or task.get("type", "") in ("code_generation", "code_completion")
+            if is_code:
+                ep = task.get("entry_point", "")
+                ep_hint = f"\n[REQUIRED FUNCTION NAME: {ep}]" if ep else ""
+                critique_prompt = (
+                    f"Original task: {task.get('prompt', '')[:400]}{ep_hint}\n\n"
+                    f"Team's code attempts:\n{r1_summary}\n\n"
+                    "Review the code attempts above. Identify any bugs, wrong function names, "
+                    "or logical errors. Then produce the CORRECTED, complete Python function. "
+                    "Output ONLY a markdown code block: ```python\n...\n```"
+                )
+            else:
+                critique_prompt = (
+                    f"Original task: {task.get('prompt', '')[:400]}\n\n"
+                    f"Team's work so far:\n{r1_summary}\n\n"
+                    "As a reviewer, identify the most important improvement or correction. "
+                    "Be specific and constructive. Focus on correctness over style."
+                )
             response = agent.execute_subtask(
                 task=task,
                 subtask_prompt=critique_prompt,
@@ -407,6 +420,11 @@ class TeamLeader:
             return text.strip()
 
         def _test_score(code: str, task: dict) -> float:
+            import signal as _signal
+
+            def _timeout_handler(signum, frame):
+                raise TimeoutError()
+
             test_cases = task.get("test_cases") or []
             test_str = task.get("test", "")
             entry_point = task.get("entry_point", "")
@@ -415,25 +433,32 @@ class TeamLeader:
             # HumanEval: run check(fn)
             if test_str and entry_point:
                 try:
+                    _signal.signal(_signal.SIGALRM, _timeout_handler)
+                    _signal.alarm(5)  # 5-second timeout
                     g: dict = {}
                     exec(code, g)
                     exec(test_str, g)
                     if entry_point in g:
                         g["check"](g[entry_point])
+                    _signal.alarm(0)
                     return 1.0
                 except Exception:
+                    _signal.alarm(0)
                     return 0.0
             # MBPP: run assert statements
             if test_cases:
                 passed = 0
                 for tc in test_cases:
                     try:
+                        _signal.signal(_signal.SIGALRM, _timeout_handler)
+                        _signal.alarm(3)  # 3-second timeout per test
                         g2: dict = {}
                         exec(code, g2)
                         exec(tc, g2)
+                        _signal.alarm(0)
                         passed += 1
                     except Exception:
-                        pass
+                        _signal.alarm(0)
                 return passed / len(test_cases)
             return 0.5
 
