@@ -224,18 +224,33 @@ class AFlowEvaluator:
                 response_nums_clean = {n.replace(",", "").rstrip(".") for n in response_nums}
                 return 1.0 if final_num.rstrip(".") in response_nums_clean else 0.0
 
-        # MATH: reference is full solution. Extract last number/expression.
+        # MATH: reference is full solution. Extract boxed answer or last number.
         if domain == "math":
-            # Look for boxed answer or last number
-            boxed = _re.search(r"\\boxed\{([^}]+)\}", answer)
-            if boxed:
-                target = boxed.group(1).strip().lower()
-                return 1.0 if target in response_lower else 0.0
-            # Fallback: last number in answer
-            nums = _re.findall(r"[\d\.]+", answer)
-            if nums:
-                target = nums[-1]
-                return 1.0 if target in response_lower else 0.0
+            # Extract \boxed{...} — handle nested braces by counting depth
+            def _extract_boxed(s: str) -> str:
+                m = _re.search(r"\\boxed\{", s)
+                if not m:
+                    return ""
+                depth, start = 1, m.end()
+                for i in range(start, len(s)):
+                    if s[i] == "{":
+                        depth += 1
+                    elif s[i] == "}":
+                        depth -= 1
+                        if depth == 0:
+                            return s[start:i].strip()
+                return s[start:].strip()
+
+            target = _extract_boxed(answer)
+            if not target:
+                # Fallback: last number in answer
+                nums = _re.findall(r"-?[\d]+(?:\.\d+)?(?:/\d+)?", answer)
+                target = nums[-1] if nums else ""
+            if target:
+                # Normalize: remove LaTeX formatting
+                target_clean = _re.sub(r"\\[a-zA-Z]+\{?|[{}\\]", "", target).strip().lower()
+                response_clean = response_lower
+                return 1.0 if (target_clean in response_clean or target in response_lower) else 0.0
 
         # DROP: answers are short numeric or text spans
         if domain == "drop":
