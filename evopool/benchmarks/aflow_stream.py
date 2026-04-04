@@ -203,6 +203,11 @@ class AFlowEvaluator:
         """Evaluation. Returns score 0–1."""
         import re as _re
         answer = str(task.get("answer", "")).strip()
+        # Strip Qwen3-8B thinking tokens before evaluation.
+        # Models put reasoning in <think>...</think>; the final answer is always outside.
+        # Without stripping, \boxed{wrong} inside thinking contaminates MATH scoring,
+        # and numbers/text in thinking contaminate GSM8K/QA scoring.
+        response = _re.sub(r"<think>.*?</think>", "", response, flags=_re.DOTALL).strip()
         response_lower = response.lower().strip()
         domain = task.get("domain", "")
 
