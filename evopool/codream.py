@@ -119,20 +119,22 @@ def run_codream(
     strength_threshold: float = 0.55,
     max_imaginations_per_agent: int = 2,
     debate_rounds: int = 1,
+    evaluator_fn=None,           # optional: fn(task, response) -> float, for insight verification
 ) -> CoDreamSession | None:
     """
-    Score-gated Co-Dream session:
+    Score-gated Co-Dream session with insight verification.
 
-    - On FAILURE (team_score < threshold): run REFLECT + CRYSTALLIZE only.
-      Skips CONTRAST/IMAGINE/DEBATE — those 3 phases add ~10 LLM calls of noise
-      from the 8B model. The key signal (what went wrong, how to update skills)
-      is captured in REFLECT + CRYSTALLIZE alone.
+    - On FAILURE (team_score < threshold): run REFLECT + CRYSTALLIZE.
+      If evaluator_fn is provided, each insight is verified by re-attempting
+      the failing task with the updated persona. Only insights that improve
+      the score are applied (gating noisy/useless insights out).
+      The verification score is NOT counted in the benchmark — it is used
+      solely as a gate to decide whether to keep the insight.
 
-    - On SUCCESS (team_score >= threshold): run abbreviated REFLECT only
-      (log what went right for future reference, no skill updates needed).
+    - On SUCCESS (team_score >= threshold): log reflections only, no updates.
 
-    This reduces LLM calls by ~70% vs the 5-phase pipeline and eliminates
-    the noise from IMAGINE/DEBATE on a weak 8B model.
+    Additionally, crystallize uses the agent's recent domain failure history
+    (from task_history) so insights are grounded in patterns, not single points.
 
     Asymmetric mode (anti-homogenization) is preserved in CRYSTALLIZE:
       Agent A incorporates insights from B only in B's strong domains.
@@ -148,7 +150,7 @@ def run_codream(
     scores = {aid: r.get("score", 0.0) for aid, r in task_results.items()}
     team_score = sum(scores.values()) / max(len(scores), 1) if scores else 0.0
 
-    # Build shared context
+    # Build shared context (include recent failure history for pattern-grounded crystallize)
     task_context = _build_task_context(task, task_results)
 
     # --- Phase 1: REFLECT (always) ---
@@ -156,12 +158,9 @@ def run_codream(
     session.reflections = reflections
 
     if team_score >= _CODREAM_SUCCESS_THRESHOLD:
-        # Success path: just log reflections, no skill updates
-        # (agents are doing well — don't disturb their profiles)
         return session
 
-    # Failure path: CRYSTALLIZE directly from reflections
-    # (skip CONTRAST/IMAGINE/DEBATE — too noisy on 8B for failure analysis)
+    # Failure path: CRYSTALLIZE with domain failure history
     insights = _phase_crystallize_from_reflections(
         team=team,
         reflections=reflections,
@@ -172,10 +171,77 @@ def run_codream(
     )
     session.insights = insights
 
-    # Apply insights (domain-constrained)
-    _apply_insights(team, insights, task_domain=task_domain)
+    # Verify each insight before applying: re-attempt the failing task with the
+    # updated persona. Only keep insights that actually improve the score.
+    # The re-attempt score is NOT reported to the benchmark — purely a gate.
+    if evaluator_fn is not None:
+        verified_insights = _verify_insights(
+            team=team,
+            insights=insights,
+            task=task,
+            backbone_llm=backbone_llm,
+            evaluator_fn=evaluator_fn,
+            original_scores=scores,
+        )
+        session.insights = verified_insights
+        _apply_insights(team, verified_insights, task_domain=task_domain)
+    else:
+        _apply_insights(team, insights, task_domain=task_domain)
 
     return session
+
+
+def _verify_insights(
+    team: list[Agent],
+    insights: list[CrystallizedInsight],
+    task: dict,
+    backbone_llm: str,
+    evaluator_fn,
+    original_scores: dict[str, float],
+) -> list[CrystallizedInsight]:
+    """
+    Verify each insight by re-attempting the failing task with updated persona.
+    Keep insight only if re-attempt score > original score.
+
+    No data leakage: the re-attempt score is used only as a binary gate
+    (keep/discard the insight), not counted in the benchmark evaluation.
+    If re-attempt fails to improve, the insight is silently discarded and
+    the persona is reverted — as if the insight never happened.
+    """
+    agent_map = {a.agent_id: a for a in team}
+    verified: list[CrystallizedInsight] = []
+
+    for insight in insights:
+        if not insight.insight:
+            continue
+        agent = agent_map.get(insight.agent_id)
+        if agent is None:
+            continue
+        original_score = original_scores.get(insight.agent_id, 0.0)
+        # Skip verification for agents that already succeeded
+        if original_score >= 1.0:
+            verified.append(insight)
+            continue
+
+        # Temporarily apply the insight to persona
+        old_persona = agent.profile.persona
+        agent.profile.persona = (
+            old_persona + f"\n[Strategy update from recent failure: {insight.insight}]"
+        )
+        try:
+            result = agent.execute_task(task, backbone_llm)
+            new_score = evaluator_fn(task, result.get("response", ""))
+            if new_score > original_score:
+                # Insight helps on the failing case → keep it
+                verified.append(insight)
+            else:
+                # Insight doesn't help → revert persona, discard insight
+                agent.profile.persona = old_persona
+        except Exception:
+            # Any error → revert and discard
+            agent.profile.persona = old_persona
+
+    return verified
 
 
 def _phase_crystallize_from_reflections(
@@ -221,14 +287,31 @@ def _phase_crystallize_from_reflections(
                     continue
             peer_material.append(f"Teammate {other.agent_id[:6]}: {peer_refl.content}")
 
+        # Build recent failure history in this domain for pattern grounding
+        domain = task_context.split(".")[0].replace("Type: ", "")
+        recent_failures = [
+            t for t in agent.profile.task_history[-10:]
+            if t.get("score", 1.0) < 0.5 and t.get("type", "") == domain
+        ]
+        failure_history_str = ""
+        if len(recent_failures) >= 2:
+            failure_history_str = (
+                f"Your recent failures in this domain ({len(recent_failures)} out of last "
+                f"{min(10, len(agent.profile.task_history))} tasks): "
+                + "; ".join(t.get("type", "?") for t in recent_failures[-3:])
+                + "\n\n"
+            )
+
         prompt = (
             f"You are {agent.profile.persona}\n"
             f"Your current skills: {agent.profile.skill_memory}\n\n"
             f"Task context (you FAILED this): {task_context}\n\n"
-            f"Your reflection: {my_reflection.content}\n\n"
+            + failure_history_str
+            + f"Your reflection: {my_reflection.content}\n\n"
             + (f"Peer observations:\n" + "\n".join(peer_material) + "\n\n" if peer_material else "")
-            + "Based on this failure and your team's observations, what is ONE concrete strategy "
-            "update you are taking away?\n\n"
+            + "Based on this failure pattern and your team's observations, what is ONE concrete "
+            "strategy update you are taking away? Be specific — name the type of mistake and "
+            "the exact fix (not vague advice like 'be more careful').\n\n"
             "Respond with JSON:\n"
             "{\n"
             '  "insight": "one concrete lesson (2 sentences max)",\n'

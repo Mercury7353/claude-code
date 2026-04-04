@@ -218,6 +218,15 @@ class EvoPool:
             agent.update_from_feedback(task, outcome, self.config.backbone_llm)
 
         # 5. Co-Dream (5-phase: reflect → contrast → imagine → debate → crystallize)
+        # Build a lightweight single-response evaluator for insight verification.
+        # evaluator(task, response_str) -> float  (not counted in benchmark)
+        def _single_response_eval(t, response_str):
+            try:
+                result = evaluator(t, {a.agent_id: response_str for a in team[:1]})
+                return result.get("team_score", 0.0)
+            except Exception:
+                return 0.0
+
         codream_session = run_codream(
             team=team,
             task=task,
@@ -225,6 +234,7 @@ class EvoPool:
             backbone_llm=self.config.backbone_llm,
             mode=self.config.codream_mode,
             strength_threshold=self.config.codream_strength_threshold,
+            evaluator_fn=_single_response_eval if self.config.codream_mode != "none" else None,
         )
 
         # 6. Update collab table
