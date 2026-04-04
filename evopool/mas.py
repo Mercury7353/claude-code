@@ -89,6 +89,7 @@ class TeamLeader:
 
     _MATH_TYPES = {"math_competition", "math_word_problem", "arithmetic"}
     _QA_TYPES = {"multi_hop_qa", "reading_comprehension", "factual_qa"}
+    _CODE_TYPES = {"code_generation", "code_completion"}
 
     def run(self, task: dict) -> MASResult:
         """Full leader-coordinated task execution pipeline."""
@@ -97,6 +98,7 @@ class TeamLeader:
         # Math tasks: use self-consistency (all agents solve independently,
         # pick majority answer) rather than primary+reviewer decomposition.
         task_type = task.get("type", "general")
+        domain = task.get("domain", "")
         if task_type in self._MATH_TYPES:
             return self._run_self_consistency(task)
 
@@ -104,6 +106,11 @@ class TeamLeader:
         # This mirrors AFlow's ScEnsemble approach for QA.
         if task_type in self._QA_TYPES:
             return self._run_qa_self_consistency(task)
+
+        # Code tasks: use best-of-k selection with independent generation.
+        # All k agents generate independently; best passes tests; LLM fix pass if needed.
+        if task_type in self._CODE_TYPES or domain in ("mbpp", "humaneval"):
+            return self._run_code_best_of_k(task)
 
         # Step 1: Analyze task
         analysis = self._analyze_task(task)
@@ -154,6 +161,62 @@ class TeamLeader:
             ],
             extra_agents_recruited=extra_recruited,
             n_rounds=1 + (1 if results_r2 else 0),
+        )
+
+    def _run_code_best_of_k(self, task: dict) -> MASResult:
+        """
+        Best-of-k code generation: all agents generate independently,
+        pick the one that passes the most test cases, then do an LLM fix pass if needed.
+        """
+        import re as _re
+
+        domain = task.get("domain", "")
+        task_type = task.get("type", "")
+        per_agent_responses: dict[str, dict] = {}
+
+        # Determine entry_point (critical for function name)
+        entry_point = task.get("entry_point") or ""
+        if not entry_point:
+            for tc in (task.get("test_cases") or []):
+                _m = _re.search(r"assert\s+(\w+)\s*\(", str(tc))
+                if _m:
+                    entry_point = _m.group(1)
+                    break
+
+        # Build the code generation prompt
+        subtask_prompt = task.get("prompt", str(task))
+        if entry_point:
+            subtask_prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + subtask_prompt
+
+        # All agents generate code independently (no shared context)
+        results: list[SubtaskResult] = []
+        for agent in self.team:
+            resp = agent.execute_subtask(
+                task=task,
+                subtask_prompt=subtask_prompt,
+                context="",  # no context — independent generation
+                backbone_llm=self.backbone_llm,
+            )
+            results.append(SubtaskResult(
+                agent_id=agent.agent_id,
+                role="primary",
+                subtask_name="code",
+                response=resp.get("response", ""),
+            ))
+            per_agent_responses[agent.agent_id] = resp
+
+        # Pick best code (tested against test cases), with optional LLM fix pass
+        final_code = self._pick_best_code(task, results)
+
+        return MASResult(
+            final_answer=final_code,
+            leader_id=self.leader.agent_id,
+            per_agent_responses=per_agent_responses,
+            per_agent_feedback={},
+            decomposition_plan=[{"agent_id": r.agent_id, "role": "primary", "skills": [task_type]}
+                                 for r in results],
+            extra_agents_recruited=[],
+            n_rounds=1,
         )
 
     def _run_self_consistency(self, task: dict) -> MASResult:
