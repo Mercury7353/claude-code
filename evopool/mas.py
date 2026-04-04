@@ -280,9 +280,12 @@ class TeamLeader:
             ))
             per_agent_responses[agent.agent_id] = resp
 
+        domain = task.get("domain", "")
+
         # Extract short answers from each response for voting.
         # For QA, take the last sentence (tends to be the direct answer) or last line.
         def _extract_answer(text: str) -> str:
+            import re as _re
             text = text.strip()
             # Take last non-empty line
             lines = [l.strip() for l in text.split("\n") if l.strip()]
@@ -290,9 +293,14 @@ class TeamLeader:
                 return text[:100].strip()
             last = lines[-1]
             # Remove common prefixes
-            for prefix in ("the answer is", "answer:", "therefore,", "so,", "thus,"):
+            for prefix in ("the answer is", "answer:", "therefore,", "so,", "thus,", "the total is", "the result is"):
                 if last.lower().startswith(prefix):
                     last = last[len(prefix):].strip().strip(":").strip()
+            # For DROP (numeric answers), extract just the number to improve voting consistency
+            if domain == "drop":
+                nums = _re.findall(r"-?[\d]+(?:\.\d+)?", last)
+                if nums:
+                    return nums[-1]
             return last[:200].lower().strip()
 
         answer_votes: dict[str, list[str]] = {}
