@@ -189,6 +189,7 @@ class TeamLeader:
             subtask_prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + subtask_prompt
 
         # All agents generate code independently (no shared context)
+        # Use 1024 max_tokens for code: Qwen3 thinking uses ~500 tokens, leaving enough for code
         results: list[SubtaskResult] = []
         for agent in self.team:
             resp = agent.execute_subtask(
@@ -196,6 +197,7 @@ class TeamLeader:
                 subtask_prompt=subtask_prompt,
                 context="",  # no context — independent generation
                 backbone_llm=self.backbone_llm,
+                max_tokens=1024,
             )
             results.append(SubtaskResult(
                 agent_id=agent.agent_id,

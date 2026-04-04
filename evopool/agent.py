@@ -121,6 +121,7 @@ class Agent:
         subtask_prompt: str,
         context: str,
         backbone_llm: str,
+        max_tokens: int = 512,
     ) -> dict:
         """Execute an assigned subtask with injected context from other agents."""
         system_prompt = self.build_system_prompt()
@@ -167,6 +168,7 @@ class Agent:
             model=backbone_llm,
             system=system_prompt,
             user=user_prompt,
+            max_tokens=max_tokens,
         )
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 
