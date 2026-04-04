@@ -568,11 +568,17 @@ class TeamLeader:
         import re as _re
 
         def _extract_code(text: str) -> str:
+            # Strip Qwen3-8B thinking tokens before extracting code
+            text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.DOTALL).strip()
             if "```python" in text:
                 return text.split("```python")[1].split("```")[0].strip()
             if "```" in text:
                 return text.split("```")[1].split("```")[0].strip()
-            return text.strip()
+            # Only use raw text if it looks like code (not narrative text)
+            stripped = text.strip()
+            if stripped.startswith("def ") or stripped.startswith("import ") or stripped.startswith("class "):
+                return stripped
+            return ""
 
         def _test_score(code: str, task: dict) -> float:
             import signal as _signal
