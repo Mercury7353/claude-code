@@ -847,31 +847,54 @@ class TeamLeader:
         candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
         best_score, _, _, best_code_resp = candidates[0]
 
-        # If best code doesn't pass all tests, attempt one LLM-based fix pass
+        # If best code doesn't pass all tests, attempt up to 3 LLM fix passes with execution feedback
         if best_score < 1.0 and entry_point:
-            try:
-                best_code = best_code_resp.split("```python")[1].split("```")[0].strip() if "```python" in best_code_resp else best_code_resp
-                fix_prompt = (
-                    f"Task: {task.get('prompt', '')[:400]}\n"
-                    f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n"
-                    f"The following code is incorrect or incomplete:\n```python\n{best_code[:800]}\n```\n\n"
-                    "Fix all bugs and produce the complete, correct Python function. "
-                    "Output ONLY a markdown code block: ```python\n...\n```"
-                )
-                fixed_raw = llm_call(
-                    model=self.backbone_llm,
-                    system="You are an expert Python programmer. Fix the code.",
-                    user=fix_prompt,
-                    max_tokens=512,
-                )
-                fixed_code = _extract_code(fixed_raw)
-                if fixed_code:
-                    fixed_code = _sanitize_function_name(fixed_code, entry_point, task.get("prompt", ""))
-                    fixed_score = _test_score(fixed_code, task)
-                    if fixed_score > best_score:
-                        return f"```python\n{fixed_code}\n```"
-            except Exception:
-                pass
+            current_code_resp = best_code_resp
+            current_score = best_score
+            for _fix_attempt in range(3):
+                try:
+                    current_code = current_code_resp.split("```python")[1].split("```")[0].strip() if "```python" in current_code_resp else current_code_resp
+                    # Collect error messages from failing test cases for execution feedback
+                    error_msgs = []
+                    import sys as _sys, traceback as _traceback
+                    for tc in (task.get("test_cases") or [])[:3]:
+                        try:
+                            _g = {}
+                            exec(current_code, _g)
+                            exec(tc, _g)
+                        except Exception as _e:
+                            _tb = _traceback.format_exc().splitlines()[-3:]
+                            error_msgs.append(f"Test: {str(tc)[:100]}\nError: {str(_e)[:200]}\n{''.join(_tb)[:200]}")
+                            if len(error_msgs) >= 2:
+                                break
+                    error_section = ""
+                    if error_msgs:
+                        error_section = "\nExecution errors:\n" + "\n---\n".join(error_msgs[:2]) + "\n"
+                    fix_prompt = (
+                        f"Task: {task.get('prompt', '')[:400]}\n"
+                        f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n"
+                        f"The following code is incorrect:\n```python\n{current_code[:800]}\n```\n"
+                        f"{error_section}\n"
+                        "Fix all bugs and produce the complete, correct Python function. "
+                        "Output ONLY a markdown code block: ```python\n...\n```"
+                    )
+                    fixed_raw = llm_call(
+                        model=self.backbone_llm,
+                        system="You are an expert Python programmer. Fix the code based on the error messages.",
+                        user=fix_prompt,
+                        max_tokens=512,
+                    )
+                    fixed_code = _extract_code(fixed_raw)
+                    if fixed_code:
+                        fixed_code = _sanitize_function_name(fixed_code, entry_point, task.get("prompt", ""))
+                        fixed_score = _test_score(fixed_code, task)
+                        if fixed_score >= 1.0:
+                            return f"```python\n{fixed_code}\n```"
+                        if fixed_score > current_score:
+                            current_code_resp = f"```python\n{fixed_code}\n```"
+                            current_score = fixed_score
+                except Exception:
+                    break
 
         return best_code_resp
 
