@@ -701,9 +701,12 @@ def _apply_insights(
 # Domain relatedness map — skills that belong to the same macro-domain cluster.
 # Co-Dream should only update skills within the same cluster as the current task.
 _DOMAIN_CLUSTERS = {
-    "math": {"math", "gsm8k", "algebra", "calculus", "math_competition", "math_word_problem", "arithmetic"},
-    "code": {"code", "mbpp", "humaneval", "programming", "code_completion", "coding", "software"},
-    "qa":   {"qa", "hotpotqa", "drop", "reading_comprehension", "multi_hop_qa", "factual_qa", "reading"},
+    "math": {"math", "gsm8k", "algebra", "calculus", "math_competition", "math_word_problem",
+             "arithmetic", "math_competition", "number_theory", "geometry", "precalculus"},
+    "code": {"code", "mbpp", "humaneval", "programming", "code_completion", "code_generation",
+             "coding", "software", "implementation"},
+    "qa":   {"qa", "hotpotqa", "drop", "reading_comprehension", "multi_hop_qa", "factual_qa",
+             "reading", "comprehension"},
     "general": {"general", "reasoning", "logic", "analysis"},
 }
 
