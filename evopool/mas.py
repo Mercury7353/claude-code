@@ -909,7 +909,7 @@ class TeamLeader:
                         model=self.backbone_llm,
                         system="You are an expert Python programmer. Fix the code based on the error messages.",
                         user=fix_prompt,
-                        max_tokens=512,
+                        max_tokens=1024,
                     )
                     fixed_code = _extract_code(fixed_raw)
                     if fixed_code:
