@@ -243,8 +243,8 @@ class AFlowEvaluator:
 
             def _normalize_math(s: str) -> str:
                 """Strip LaTeX markup, whitespace, and normalize for comparison."""
-                s = _re.sub(r"\\[a-zA-Z]+", "", s)  # remove \cmd
-                s = _re.sub(r"[{}\s,]", "", s)       # strip braces, spaces, commas
+                s = _re.sub(r"\\[a-zA-Z]+", "", s)   # remove \cmd (frac, sqrt, cdot...)
+                s = _re.sub(r"[{}\$\s,]", "", s)      # strip braces, dollar signs, spaces, commas
                 return s.strip().lower()
 
             target = _extract_boxed(answer)
