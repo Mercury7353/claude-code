@@ -119,15 +119,20 @@ async def _workflow_code(ops: dict, prompt: str, entry_point: str = "solution") 
 async def _workflow_qa(ops: dict, prompt: str) -> str:
     """AFlow QA workflow: Custom → ScEnsemble(2)."""
     # Two independent reasoning attempts
-    resp1 = await ops["custom"](input=prompt, instruction="Answer this question carefully:\n")
-    resp2 = await ops["custom"](
-        input=prompt,
-        instruction="Think step by step and answer this question:\n",
-    )
-    solutions = [resp1.get("response", ""), resp2.get("response", "")]
-
-    best = await ops["sc_ensemble"](solutions=solutions, problem=prompt)
-    return best.get("response", solutions[0])
+    solutions = []
+    for instruction in ["Answer this question carefully:\n", "Think step by step and answer this question:\n"]:
+        try:
+            resp = await ops["custom"](input=prompt, instruction=instruction)
+            solutions.append(resp.get("response", ""))
+        except Exception:
+            pass
+    if not solutions:
+        return ""
+    try:
+        best = await ops["sc_ensemble"](solutions=solutions, problem=prompt)
+        return best.get("response", solutions[0])
+    except Exception:
+        return solutions[0]
 
 
 def _infer_entry_point(task: dict) -> str:
