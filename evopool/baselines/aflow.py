@@ -219,20 +219,11 @@ class AFlowPool:
         self.seed = seed
         self.task_index = 0
         self.metrics_log: list[dict] = []
-        self._last_domain: str = ""  # reset ops on domain switch to pick fresh server
-
-    def _get_ops(self, domain: str = ""):
-        # Re-initialize on domain switch — ensures we pick a live server URL
-        # (important for long runs where a server may expire mid-benchmark)
-        if domain != self._last_domain:
-            _reset_ops()
-            self._last_domain = domain
-        return _get_ops()
 
     def process_task(self, task: dict, evaluator: Callable) -> dict:
         domain = task.get("domain", task.get("type", "qa")).lower()
         category = _DOMAIN_TO_CATEGORY.get(domain, "qa")
-        ops = self._get_ops(domain)
+        ops = _get_ops()
 
         # Bridge async → sync
         try:
