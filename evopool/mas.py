@@ -574,9 +574,9 @@ class TeamLeader:
         self, assignments: list[SubtaskAssignment], task: dict
     ) -> list[SubtaskResult]:
         """Execute all subtask assignments (Round 1). Returns results in assignment order."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         agent_map = {a.agent_id: a for a in self.team + self._extra_agents()}
-        results: list[SubtaskResult] = []
-        accumulated_context = ""
 
         # For code tasks where all agents are "primary", don't pass context between agents
         # so each generates an independent solution (avoids copy-cat behavior).
@@ -585,31 +585,57 @@ class TeamLeader:
         is_code_task = domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion")
         all_primary = is_code_task and all(a.role == "primary" for a in assignments)
 
-        for assignment in assignments:
-            agent = agent_map.get(assignment.agent_id)
-            if agent is None:
-                continue
+        if all_primary:
+            # Code tasks: all agents are independent → run in parallel
+            def _run(assignment):
+                agent = agent_map.get(assignment.agent_id)
+                if agent is None:
+                    return assignment, ""
+                response = agent.execute_subtask(
+                    task=task,
+                    subtask_prompt=assignment.subtask_prompt,
+                    context="",
+                    backbone_llm=self.backbone_llm,
+                )
+                return assignment, response.get("response", "")
 
-            # For independent code generation, skip accumulated context
-            context = "" if all_primary else accumulated_context
-            response = agent.execute_subtask(
-                task=task,
-                subtask_prompt=assignment.subtask_prompt,
-                context=context,
-                backbone_llm=self.backbone_llm,
-            )
-            result = SubtaskResult(
-                agent_id=assignment.agent_id,
-                role=assignment.role,
-                subtask_name=assignment.role,
-                response=response.get("response", ""),
-            )
-            results.append(result)
-            # Accumulate context for subsequent agents (only non-code tasks)
-            if not all_primary:
+            results_map = {}
+            with ThreadPoolExecutor(max_workers=len(assignments)) as exe:
+                futs = {exe.submit(_run, a): i for i, a in enumerate(assignments)}
+                for fut in as_completed(futs):
+                    idx = futs[fut]
+                    assignment, resp = fut.result()
+                    results_map[idx] = SubtaskResult(
+                        agent_id=assignment.agent_id,
+                        role=assignment.role,
+                        subtask_name=assignment.role,
+                        response=resp,
+                    )
+            return [results_map[i] for i in range(len(assignments))]
+
+        else:
+            # Non-code tasks: sequential (later agents see earlier agents' context)
+            results: list[SubtaskResult] = []
+            accumulated_context = ""
+            for assignment in assignments:
+                agent = agent_map.get(assignment.agent_id)
+                if agent is None:
+                    continue
+                response = agent.execute_subtask(
+                    task=task,
+                    subtask_prompt=assignment.subtask_prompt,
+                    context=accumulated_context,
+                    backbone_llm=self.backbone_llm,
+                )
+                result = SubtaskResult(
+                    agent_id=assignment.agent_id,
+                    role=assignment.role,
+                    subtask_name=assignment.role,
+                    response=response.get("response", ""),
+                )
+                results.append(result)
                 accumulated_context += f"\n[{assignment.role} by {assignment.agent_id}]: {result.response[:300]}"
-
-        return results
+            return results
 
     def _critique_round(
         self, results_r1: list[SubtaskResult], task: dict
