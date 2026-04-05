@@ -49,6 +49,10 @@ def main():
     parser.add_argument("--output_dir", type=str, default="results/")
     parser.add_argument("--domains", type=str, default=None,
                         help="Comma-separated domain list (default: all 6)")
+    parser.add_argument("--save_pool", type=str, default=None,
+                        help="Path to save final pool state (EvoPool only)")
+    parser.add_argument("--load_pool", type=str, default=None,
+                        help="Path to load pre-trained pool state (EvoPool only, warm start)")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -156,6 +160,11 @@ def main():
     with open(output_file, "w") as f:
         json.dump(output, f, indent=2)
 
+    # Save pool state if requested (EvoPool only)
+    if args.save_pool and hasattr(system, "save"):
+        system.save(args.save_pool)
+        print(f"Pool state saved to: {args.save_pool}")
+
     print(f"\n=== Results ===")
     print(f"Mean score: {summary['mean_score']:.3f}")
     print(f"Final score (last 10): {summary['final_score']:.3f}")
@@ -253,6 +262,17 @@ def _build_system(args):
         collab_score_enabled=collab_score_enabled,
         seed=args.seed,
     )
+
+    # Warm-start: load pre-evolved pool state, override config's fresh pool
+    if getattr(args, "load_pool", None):
+        pool = EvoPool.load(args.load_pool)
+        # Override config to match current run parameters (keeps memories, resets task_index)
+        pool.config = config
+        pool.task_index = 0
+        print(f"Warm-start: loaded pool from {args.load_pool} "
+              f"({len(pool.pool)} agents, memories intact)")
+        return pool
+
     return EvoPool(config)
 
 

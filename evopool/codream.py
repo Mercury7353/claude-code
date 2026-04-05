@@ -123,6 +123,10 @@ class CoDreamSession:
     imaginations: list[Imagination] = field(default_factory=list)
     debates: list[DebateExchange] = field(default_factory=list)
     insights: list[CrystallizedInsight] = field(default_factory=list)
+    # Verify stats (populated when evaluator_fn is used)
+    n_insights_generated: int = 0    # insights before verify
+    n_insights_verified: int = 0     # insights that passed verify
+    verify_rate: float = 0.0         # n_verified / n_generated (0 if n_generated==0)
 
 
 # ------------------------------------------------------------------
@@ -209,9 +213,17 @@ def run_codream(
             evaluator_fn=evaluator_fn,
             original_scores=scores,
         )
+        session.n_insights_generated = len(insights)
+        session.n_insights_verified = len(verified_insights)
+        session.verify_rate = (
+            len(verified_insights) / len(insights) if insights else 0.0
+        )
         session.insights = verified_insights
         _apply_insights(team, verified_insights, task_domain=task_domain)
     else:
+        session.n_insights_generated = len(insights)
+        session.n_insights_verified = len(insights)  # no verify = all applied
+        session.verify_rate = 1.0
         _apply_insights(team, insights, task_domain=task_domain)
 
     return session

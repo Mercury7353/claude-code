@@ -27,23 +27,35 @@ class AgentProfile:
     TASK_HISTORY_LIMIT: int = field(default=20, repr=False, compare=False)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "persona": self.persona,
             "skill_memory": self.skill_memory,
             "task_history": self.task_history[-self.TASK_HISTORY_LIMIT:],
             "collab_log": self.collab_log,
             "perf_stats": {k: v[-20:] for k, v in self.perf_stats.items()},
         }
+        # Persist L2 subdomain insights and L1 working memory if present
+        if hasattr(self, "subdomain_insights") and self.subdomain_insights:
+            d["subdomain_insights"] = self.subdomain_insights
+        if hasattr(self, "working_memory") and self.working_memory:
+            d["working_memory"] = self.working_memory
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> AgentProfile:
-        return cls(
+        obj = cls(
             persona=d["persona"],
             skill_memory=d["skill_memory"],
             task_history=d["task_history"],
             collab_log=d["collab_log"],
             perf_stats=d["perf_stats"],
         )
+        # Restore L2/L1 memories
+        if "subdomain_insights" in d:
+            obj.subdomain_insights = d["subdomain_insights"]
+        if "working_memory" in d:
+            obj.working_memory = d["working_memory"]
+        return obj
 
     def summarize(self) -> str:
         """Short text summary for use in prompts."""

@@ -277,6 +277,7 @@ class EvoPool:
 
         self.task_index += 1
 
+        cd = codream_session
         result_dict: dict = {
             "task_id": task.get("id", self.task_index),
             "team_score": team_score,
@@ -284,7 +285,10 @@ class EvoPool:
             "leader_agent_id": leader_id,
             "extra_agents_recruited": extra_recruited,
             "decomposition_plan": decomposition_plan,
-            "codream_insights": len(codream_session.insights) if codream_session else 0,
+            "codream_insights": len(cd.insights) if cd else 0,
+            "codream_generated": cd.n_insights_generated if cd else 0,
+            "codream_verified": cd.n_insights_verified if cd else 0,
+            "codream_verify_rate": cd.verify_rate if cd else 0.0,
             "lifecycle_events": [e.__dict__ for e in lifecycle_events_this_task],
             "metrics": metrics,
         }
