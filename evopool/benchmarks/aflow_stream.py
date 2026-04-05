@@ -311,6 +311,7 @@ class AFlowEvaluator:
     def _evaluate_code(self, task: dict, response: str) -> float:
         """Try to execute code and check test cases."""
         import re as _re
+        import signal as _signal
         domain = task.get("domain", "")
 
         # Strip Qwen3-8B thinking tokens first — models often include Python examples
@@ -324,6 +325,9 @@ class AFlowEvaluator:
         elif "```" in response:
             code = response.split("```")[1].split("```")[0]
 
+        def _timeout_handler(signum, frame):
+            raise TimeoutError("code execution timed out")
+
         if domain == "humaneval":
             # HumanEval: run check(entry_point_fn) to actually test correctness
             test_str = task.get("test", "")
@@ -331,6 +335,8 @@ class AFlowEvaluator:
             if not test_str:
                 return 0.5
             try:
+                _signal.signal(_signal.SIGALRM, _timeout_handler)
+                _signal.alarm(8)  # 8-second timeout to prevent infinite loops
                 exec_globals: dict = {}
                 exec(code, exec_globals)
                 exec(test_str, exec_globals)
@@ -342,8 +348,10 @@ class AFlowEvaluator:
                                   if callable(v) and k not in ("check",) and not k.startswith("_")]
                     if candidates:
                         exec_globals["check"](candidates[0])
+                _signal.alarm(0)
                 return 1.0
             except Exception:
+                _signal.alarm(0)
                 return 0.0
 
         # MBPP and other code tasks: test_cases are direct assert statements
@@ -357,10 +365,13 @@ class AFlowEvaluator:
             if not test:
                 continue
             try:
+                _signal.signal(_signal.SIGALRM, _timeout_handler)
+                _signal.alarm(5)  # 5-second timeout per test case
                 exec_globals: dict = {}
                 exec(code, exec_globals)
                 exec(test, exec_globals)
+                _signal.alarm(0)
                 passed += 1
             except Exception:
-                pass
+                _signal.alarm(0)
         return passed / max(total, 1)
