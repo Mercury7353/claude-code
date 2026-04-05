@@ -28,6 +28,19 @@ for domain in ['gsm8k','hotpotqa','mbpp','math','humaneval','drop']:
     if scores:
         m = sum(scores)/len(scores)
         print(f'  {domain}: {m:.3f} ({len(scores)} tasks)')
+
+# Detect potential server-outage 0.0 clusters (DROP domain = tasks 501-600)
+per_task = d.get('per_task_results', [])
+drop_tasks = [(r['task_index'], r['score']) for r in per_task if r.get('domain') == 'drop']
+if drop_tasks:
+    zero_drop = [t for t, s in drop_tasks if s == 0.0]
+    if zero_drop:
+        print(f'  ⚠️  DROP tasks with 0.0 score: {len(zero_drop)} tasks at indices {zero_drop[:10]}...')
+        # Check if they cluster at end (server outage pattern)
+        if max(zero_drop) >= 90:
+            print('  ⚠️  0.0 cluster at end of DROP — possible server expiry gap')
+    else:
+        print('  ✅ No DROP zero-score cluster detected')
 "
 else
     echo "⚠️  E17 not ready yet: $E17_RESULT"
