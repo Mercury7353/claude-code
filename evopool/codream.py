@@ -325,10 +325,16 @@ def _phase_crystallize_from_reflections(
             '    (e.g. "for ALGEBRA fraction problems: simplify first" is subdomain=algebra,\n'
             '     but would be WRONG for geometry or combinatorics problems)\n'
             '  - "task_specific": only applies to this exact problem type; not transferable\n\n'
-            "IMPORTANT: If the insight references a specific technique only valid for one "
-            "sub-topic (algebra, geometry, fractions, recursion, string manipulation, etc.), "
-            'classify it as "subdomain", NOT "general". Only classify as "general" if the '
-            "strategy would improve performance on math AND code AND QA equally.\n\n"
+            "IMPORTANT: To classify transferability, ask yourself these THREE questions:\n"
+            "  Q1: Would this insight help me solve a Python coding problem? (yes/no)\n"
+            "  Q2: Would this insight help me answer a multi-hop QA question? (yes/no)\n"
+            "  Q3: Would this insight help me solve a competition math problem? (yes/no)\n"
+            'If all three answers are YES → "general"\n'
+            'If only same-domain answers are YES → "subdomain"\n'
+            'If neither or just this specific problem type → "task_specific"\n\n'
+            "Example: 'For fraction problems, simplify before solving' → Q1=no, Q2=no, Q3=maybe "
+            "for fractions only → subdomain=fractions\n"
+            "Example: 'Read the question twice before answering' → Q1=yes, Q2=yes, Q3=yes → general\n\n"
             "Respond with JSON:\n"
             "{\n"
             '  "insight": "one concrete lesson (2 sentences max)",\n'
