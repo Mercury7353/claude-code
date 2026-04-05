@@ -849,7 +849,8 @@ def _append_to_persona(agent, insight_text: str, tag: str = "") -> None:
 # Co-Dream should only update skills within the same cluster as the current task.
 _DOMAIN_CLUSTERS = {
     "math": {"math", "gsm8k", "algebra", "calculus", "math_competition", "math_word_problem",
-             "arithmetic", "math_competition", "number_theory", "geometry", "precalculus"},
+             "arithmetic", "number_theory", "geometry", "precalculus", "combinatorics",
+             "counting_and_probability", "prealgebra", "intermediate_algebra"},
     "code": {"code", "mbpp", "humaneval", "programming", "code_completion", "code_generation",
              "coding", "software", "implementation"},
     "qa":   {"qa", "hotpotqa", "drop", "reading_comprehension", "multi_hop_qa", "factual_qa",

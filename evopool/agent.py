@@ -358,7 +358,7 @@ class Agent:
 _SUBDOMAIN_KEYWORDS: dict[str, list[str]] = {
     "algebra": ["equation", "polynomial", "linear", "quadratic", "variable", "solve for", "simplify"],
     "geometry": ["triangle", "circle", "angle", "area", "perimeter", "polygon", "radius", "chord"],
-    "combinatorics": ["combination", "permutation", "probability", "ways to", "how many", "arrange", "choose"],
+    "combinatorics": ["combination", "permutation", "probability", "ways to", "how many", "arrange", "choose", "counting", "selections"],
     "number_theory": ["prime", "divisible", "gcd", "lcm", "remainder", "modulo", "factor"],
     "arithmetic": ["fraction", "decimal", "percentage", "ratio", "proportion"],
     "string_manipulation": ["string", "substring", "palindrome", "anagram", "character"],
