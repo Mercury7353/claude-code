@@ -352,26 +352,14 @@ class Agent:
 # Fix 1: Subdomain insight injection helper
 # ------------------------------------------------------------------
 
-# Map task domain/type → candidate subdomain keys to look up in subdomain_insights.
-# E.g. a MATH task might match "algebra", "geometry", "combinatorics", etc.
-# We use the task's type/domain + question text keywords to guess the sub-domain.
-_SUBDOMAIN_KEYWORDS: dict[str, list[str]] = {
-    "algebra": ["equation", "polynomial", "linear", "quadratic", "variable", "solve for", "simplify"],
-    "geometry": ["triangle", "circle", "angle", "area", "perimeter", "polygon", "radius", "chord"],
-    "combinatorics": ["combination", "permutation", "probability", "ways to", "how many", "arrange", "choose", "counting", "selections"],
-    "number_theory": ["prime", "divisible", "gcd", "lcm", "remainder", "modulo", "factor"],
-    "arithmetic": ["fraction", "decimal", "percentage", "ratio", "proportion"],
-    "string_manipulation": ["string", "substring", "palindrome", "anagram", "character"],
-    "recursion": ["recursion", "recursive", "fibonacci", "factorial", "base case"],
-    "sorting": ["sort", "sorted", "order", "ascending", "descending"],
-    "multi_hop_qa": ["multiple", "step", "follow-up", "chain"],
-}
-
-
 def _get_subdomain_hint(profile: "AgentProfile", task: dict) -> str:
     """
     Look up subdomain_insights stored on this agent's profile and return a
-    formatted hint string if any scoped insights match the current task's sub-domain.
+    formatted hint string if any scoped insights match the current task's domain.
+
+    Uses _domains_related() from codream.py to check if a stored scope (e.g. "algebra")
+    is in the same cluster as the current task's domain (e.g. "math").
+    This is more robust than keyword matching and reuses the existing cluster logic.
 
     Only called for non-code, non-review tasks (Fix 1 injection).
     """
@@ -379,18 +367,14 @@ def _get_subdomain_hint(profile: "AgentProfile", task: dict) -> str:
     if not subdomain_insights:
         return ""
 
-    # Get task text to do keyword matching
-    task_text = (
-        task.get("prompt", "") + " " +
-        task.get("question", "") + " " +
-        task.get("type", "")
-    ).lower()
+    from .codream import _domains_related
+    task_domain = task.get("domain", task.get("type", ""))
 
     matched_insights: list[str] = []
     for scope, insights in subdomain_insights.items():
-        # Check if any keywords for this scope appear in the task
-        keywords = _SUBDOMAIN_KEYWORDS.get(scope, [scope.replace("_", " ")])
-        if any(kw in task_text for kw in keywords):
+        # Only inject if the scope belongs to the same domain cluster as the current task.
+        # e.g. algebra + math → True; algebra + drop → False; recursion + humaneval → True
+        if _domains_related(scope, task_domain):
             matched_insights.extend(insights)
 
     if not matched_insights:
