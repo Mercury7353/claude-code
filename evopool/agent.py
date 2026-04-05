@@ -190,11 +190,12 @@ class Agent:
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 
     def execute_task(self, task: dict, backbone_llm: str) -> dict:
-        """Execute a task and return result dict (used by self-consistency math path)."""
+        """Execute a task and return result dict (used by self-consistency math/QA path)."""
         system_prompt = self.build_system_prompt()
         user_prompt = task.get("prompt", task.get("question", str(task)))
         domain = task.get("domain", "")
         task_type = task.get("type", "")
+        is_code = domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion")
         # Add format hint for math self-consistency
         if domain == "gsm8k" or task_type == "math_word_problem":
             user_prompt = user_prompt + "\n\nSolve step by step. End your answer with: #### <final number>"
@@ -204,6 +205,16 @@ class Agent:
                 + "\n\nSolve step by step. Express your final answer in LaTeX inside \\boxed{}."
                 + " For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
             )
+
+        # Fix 1 + Fix 3: inject scoped subdomain hints and working memory for math/QA tasks.
+        # These were previously only in execute_subtask, missing the math/QA self-consistency path.
+        if not is_code:
+            subdomain_hint = _get_subdomain_hint(self.profile, task)
+            if subdomain_hint:
+                user_prompt = subdomain_hint + "\n\n" + user_prompt
+            wm_hint = _get_working_memory_hint(self.profile, task)
+            if wm_hint:
+                user_prompt = wm_hint + "\n\n" + user_prompt
 
         response = llm_call(
             model=backbone_llm,
