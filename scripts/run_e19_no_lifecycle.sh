@@ -22,11 +22,22 @@ cd /nfs/hpc/share/zhanyaol/claude-code
 
 URL6=""
 URL7=""
-[ -f "vllm_server_6.json" ] && URL6=$(python3 -c "import json; d=json.load(open('vllm_server_6.json')); print(d['url'])" 2>/dev/null)
-[ -f "vllm_server_7.json" ] && URL7=$(python3 -c "import json; d=json.load(open('vllm_server_7.json')); print(d['url'])" 2>/dev/null)
+
+check_server() {
+    local url="$1"
+    curl -s --max-time 5 "${url}/v1/models" | grep -q qwen 2>/dev/null
+}
+for jf in "vllm_server_8007.json" "vllm_server_6.json"; do
+    [ -f "$jf" ] && candidate=$(python3 -c "import json; d=json.load(open('$jf')); print(d['url'])" 2>/dev/null)
+    check_server "$candidate" && URL6="$candidate" && echo "Server A: $URL6 (from $jf)" && break
+done
+for jf in "vllm_server_8008.json" "vllm_server_7.json"; do
+    [ -f "$jf" ] && candidate=$(python3 -c "import json; d=json.load(open('$jf')); print(d['url'])" 2>/dev/null)
+    check_server "$candidate" && URL7="$candidate" && echo "Server B: $URL7 (from $jf)" && break
+done
 
 if [ -z "$URL6" ] || [ -z "$URL7" ]; then
-    echo "ERROR: Servers 6/7 not found"
+    echo "ERROR: No responsive vLLM servers found"
     exit 1
 fi
 echo "Using servers: $URL6, $URL7"
