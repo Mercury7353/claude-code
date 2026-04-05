@@ -8,14 +8,15 @@ import sys
 RESULTS_BASE = "/nfs/hpc/share/zhanyaol/claude-code/results"
 
 EXPERIMENTS = {
-    "AFlow (E9)":             "e9/aflow_aflow_stream_seed42.json",
-    "SC (E10)":               "e10/self_consistency_aflow_stream_seed42.json",
-    "EvoPool full (E11)":     "e11/evopool_full_aflow_stream_seed42.json",
-    "EvoPool fix1 (E12)":     "e12/evopool_full_aflow_stream_seed42.json",
-    "DyLAN (E13)":            "e13/dylan_aflow_stream_seed42.json",
-    "EvoPool noCoDream (E15)":"e15/evopool_no_codream_aflow_stream_seed42.json",
-    "EvoPool fix2 (E16)":     "e16/evopool_full_aflow_stream_seed42.json",
-    "EvoPool noCoDream (E6)": "e6/evopool_no_codream_aflow_stream_seed42.json",
+    "Single-Agent (E18)":        "e18/single_agent_aflow_stream_seed42.json",
+    "SC k=5 (E10)":              "e10/self_consistency_aflow_stream_seed42.json",
+    "AFlow† (E9)":               "e9/aflow_aflow_stream_seed42.json",
+    "DyLAN (E13)":               "e13/dylan_aflow_stream_seed42.json",
+    "EvoPool-noCoDream (E15b)":  "e15/evopool_no_codream_aflow_stream_seed42.json",
+    "EvoPool-full (E17)":        "e17/evopool_full_aflow_stream_seed42.json",
+    # --- older / ablation runs (reference only) ---
+    "EvoPool fix1 (E12)":        "e12/evopool_full_aflow_stream_seed42.json",
+    "EvoPool fix2-buggy (E16)":  "e16/evopool_full_aflow_stream_seed42.json",
 }
 
 DOMAINS = ["gsm8k", "hotpotqa", "mbpp", "math", "humaneval", "drop"]

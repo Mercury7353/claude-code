@@ -205,6 +205,13 @@ def _build_system(args):
             seed=args.seed,
         )
 
+    if condition == "single_agent":
+        from evopool.baselines.single_agent import SingleAgentPool
+        return SingleAgentPool(
+            backbone_llm=args.backbone_llm,
+            seed=args.seed,
+        )
+
     if condition == "aflow":
         from evopool.baselines.aflow import AFlowPool
         return AFlowPool(
