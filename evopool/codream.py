@@ -843,8 +843,13 @@ def _apply_insights(
                 agent.profile.subdomain_insights = {}
             scope = insight.domain_scope.lower().replace(" ", "_").replace("-", "_")
             existing = agent.profile.subdomain_insights.get(scope, [])
-            # Keep at most 3 scoped insights per subdomain to avoid prompt bloat
-            agent.profile.subdomain_insights[scope] = (existing + [insight.insight])[-3:]
+            # Deduplication: skip if very similar insight already stored for this scope
+            fingerprint = insight.insight.strip().lower()[:40]
+            if any(fingerprint in s.lower() for s in existing):
+                existing = existing  # no-op; fall through to skill update
+            else:
+                # Keep at most 3 scoped insights per subdomain to avoid prompt bloat
+                agent.profile.subdomain_insights[scope] = (existing + [insight.insight])[-3:]
             # Also update skill_memory within the domain (fall through to skill update below)
 
         # Fix 3: Working memory for task_specific insights.
