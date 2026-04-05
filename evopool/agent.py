@@ -171,6 +171,13 @@ class Agent:
             if subdomain_hint:
                 subtask_prompt = subdomain_hint + "\n\n" + subtask_prompt
 
+        # Fix 3: inject working memory (task_specific insights from previous task, same domain).
+        # These are one-shot hints: used once, then cleared to avoid stale/irrelevant advice.
+        if not is_code_task and not is_review:
+            wm_hint = _get_working_memory_hint(self.profile, task)
+            if wm_hint:
+                subtask_prompt = wm_hint + "\n\n" + subtask_prompt
+
         user_prompt = subtask_prompt
         if context:
             user_prompt = f"Context from teammates:\n{context}\n\n---\nYour task:\n{subtask_prompt}"
@@ -349,7 +356,7 @@ class Agent:
 
 
 # ------------------------------------------------------------------
-# Fix 1: Subdomain insight injection helper
+# Fix 2 / Fix 3: Subdomain + working memory injection helpers
 # ------------------------------------------------------------------
 
 def _get_subdomain_hint(profile: "AgentProfile", task: dict) -> str:
@@ -382,5 +389,36 @@ def _get_subdomain_hint(profile: "AgentProfile", task: dict) -> str:
 
     hint = "[Scoped strategy from past experience — apply only if relevant to this sub-topic]:\n"
     hint += "\n".join(f"- {ins}" for ins in matched_insights[:2])  # max 2 to avoid bloat
+    return hint
+
+
+def _get_working_memory_hint(profile: "AgentProfile", task: dict) -> str:
+    """
+    Fix 3: Inject and clear working memory (task_specific insights from the previous task).
+
+    working_memory stores [(domain, insight), ...] tuples written by _apply_insights
+    when the Co-Dream produces a task_specific insight.  We inject those that belong to
+    the same macro-domain cluster as the current task, then CLEAR the entire working
+    memory so stale hints do not persist across domain switches.
+
+    One-shot: the hint is used exactly once (on the very next task), then discarded.
+    """
+    working_mem: list[tuple[str, str]] = getattr(profile, 'working_memory', [])
+    if not working_mem:
+        return ""
+
+    from .codream import _domains_related
+    task_domain = task.get("domain", task.get("type", ""))
+
+    relevant = [ins for (dom, ins) in working_mem if _domains_related(dom, task_domain)]
+
+    # Always clear after reading — working memory is one-shot regardless of domain match
+    profile.working_memory = []
+
+    if not relevant:
+        return ""
+
+    hint = "[Lesson from last similar task — apply only if directly relevant]:\n"
+    hint += "\n".join(f"- {ins}" for ins in relevant[:2])
     return hint
 

@@ -794,7 +794,13 @@ def _apply_insights(
         # Subdomain insights (e.g. "for algebra: simplify fractions first") must NOT pollute
         # the persona — they would be applied to geometry/code/QA tasks where they are wrong.
         if insight.is_generalizable and insight.transferability == "general" and insight.insight:
-            _append_to_persona(agent, insight.insight, tag="[General strategy]")
+            # Fix 2a: Broadcast general metacognitive insights to ALL team members.
+            # A general strategy (e.g. "decompose into sub-problems then verify each step")
+            # is equally valuable for every agent — not just the one who discovered it.
+            # _append_to_persona handles deduplication (Fix 2b) and the 3-slot cap per agent.
+            for recipient in team:
+                _append_to_persona(recipient, insight.insight, tag="[General strategy]")
+            # Track hypothesis only on originating agent (they discovered it)
             if not hasattr(agent.profile, 'hypotheses'):
                 agent.profile.hypotheses = []
             agent.profile.hypotheses = (
@@ -812,6 +818,18 @@ def _apply_insights(
             # Keep at most 3 scoped insights per subdomain to avoid prompt bloat
             agent.profile.subdomain_insights[scope] = (existing + [insight.insight])[-3:]
             # Also update skill_memory within the domain (fall through to skill update below)
+
+        # Fix 3: Working memory for task_specific insights.
+        # Insights that are only valid for this exact problem type (e.g. "this specific ODE
+        # needs integrating factor") are too narrow for persona/subdomain storage. However,
+        # they may still be useful for the VERY NEXT task if it shares the same macro-domain.
+        # Store as (domain, insight) tuples; agent.py injects and clears on the next task.
+        if insight.transferability == "task_specific" and insight.insight and task_domain:
+            if not hasattr(agent.profile, 'working_memory'):
+                agent.profile.working_memory = []
+            agent.profile.working_memory = (
+                agent.profile.working_memory + [(task_domain, insight.insight)]
+            )[-2:]  # at most 2 one-shot hints; cleared by execute_subtask after use
 
         # Domain-specific insights: apply skill updates (bounded, domain-constrained)
         for domain, delta in insight.skill_updates.items():
@@ -838,7 +856,17 @@ def _apply_insights(
 
 
 def _append_to_persona(agent, insight_text: str, tag: str = "") -> None:
-    """Append a verified insight to agent persona (bounded to last 3 general strategies)."""
+    """Append a verified insight to agent persona (bounded to last 3 general strategies).
+
+    Fix 2b: Deduplication — skip if an identical or near-identical insight is already
+    present in the persona (first 40 chars lowercased match).  Prevents the same
+    general strategy from consuming all 3 persona slots when multiple agents or
+    multiple tasks produce equivalent insights.
+    """
+    # Deduplication: skip if very similar insight already in persona
+    fingerprint = insight_text.strip().lower()[:40]
+    if fingerprint and fingerprint in agent.profile.persona.lower():
+        return
     marker = f"\n{tag}: {insight_text}" if tag else f"\n{insight_text}"
     # Keep at most 3 general strategies in persona to avoid prompt bloat
     import re as _re
