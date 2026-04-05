@@ -409,19 +409,20 @@ def _phase_reflect(
         score = task_results.get(agent.agent_id, {}).get("score", 0.5)
         prompt = (
             f"You are {agent.profile.persona}\n\n"
-            f"You just completed a task as part of a team.\n"
-            f"Task context: {task_context}\n"
-            f"Your performance score: {score:.2f}\n\n"
-            "Reflect honestly on this experience:\n"
-            "1. What surprised you or worked differently than expected?\n"
-            "2. What knowledge gaps did you notice in yourself?\n"
-            "3. What did you find genuinely interesting or curious?\n"
-            "4. What domains felt like they were tested? List them.\n\n"
-            "Be honest, not diplomatic. Express genuine intellectual curiosity.\n"
+            f"You just FAILED a task (score: {score:.2f}) as part of a team.\n"
+            f"Task context: {task_context}\n\n"
+            "Diagnose your failure honestly and concisely:\n"
+            "1. What specific step went wrong? (e.g., misread the question, wrong formula, "
+            "formatting error, reasoning gap)\n"
+            "2. What would you do differently next time to avoid this mistake?\n"
+            "3. Is this a general reasoning error (applies to many task types) or "
+            "specific to this sub-domain?\n"
+            "4. What domain(s) does this failure relate to?\n\n"
+            "Be concrete — avoid vague answers like 'I need to think more carefully'.\n"
             "Respond with JSON:\n"
             "{\n"
-            '  "reflection": "your honest reflection (2-4 sentences)",\n'
-            '  "surprise_domains": ["domain1", "domain2"]\n'
+            '  "reflection": "diagnosis + concrete fix (2-3 sentences)",\n'
+            '  "surprise_domains": ["domain1"]\n'
             "}"
         )
         try:
