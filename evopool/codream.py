@@ -33,10 +33,25 @@ from __future__ import annotations
 
 import json
 import math
+import re as _re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from .llm import llm_call
+
+
+def _parse_json(raw: str) -> dict:
+    """Parse JSON from LLM output, stripping markdown code fences if present."""
+    raw = raw.strip()
+    # Strip ```json ... ``` or ``` ... ``` wrappers
+    raw = _re.sub(r"^```(?:json)?\s*\n?", "", raw)
+    raw = _re.sub(r"\n?```\s*$", "", raw)
+    # Extract the outermost { ... } block if there's leading/trailing text
+    start = raw.find("{")
+    end = raw.rfind("}") + 1
+    if start >= 0 and end > start:
+        raw = raw[start:end]
+    return json.loads(raw)
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -353,7 +368,7 @@ def _phase_crystallize_from_reflections(
         )
         try:
             raw = llm_call(model=backbone_llm, user=prompt, max_tokens=350)
-            data = json.loads(raw.strip())
+            data = _parse_json(raw)
             transferability = data.get("transferability", "general")
             domain_scope = data.get("domain_scope", "any")
             # Enforce consistency: subdomain/task_specific insights are NOT generalizable
@@ -411,7 +426,7 @@ def _phase_reflect(
         )
         try:
             raw = llm_call(model=backbone_llm, user=prompt, max_tokens=250)
-            data = json.loads(raw.strip())
+            data = _parse_json(raw)
             reflections.append(Reflection(
                 agent_id=agent.agent_id,
                 content=data.get("reflection", ""),
@@ -484,7 +499,7 @@ def _phase_contrast(
         )
         try:
             raw = llm_call(model=backbone_llm, user=prompt, max_tokens=200)
-            data = json.loads(raw.strip())
+            data = _parse_json(raw)
             contrasts.append(ContrastInsight(
                 agent_id=agent.agent_id,
                 best_agent_id=best_aid,
@@ -553,7 +568,7 @@ def _phase_imagine(
         )
         try:
             raw = llm_call(model=backbone_llm, user=prompt, max_tokens=400)
-            data = json.loads(raw.strip())
+            data = _parse_json(raw)
             for item in data.get("ideas", [])[:2]:
                 imaginations.append(Imagination(
                     agent_id=agent.agent_id,
@@ -756,7 +771,7 @@ def _phase_crystallize(
         )
         try:
             raw = llm_call(model=backbone_llm, user=prompt, max_tokens=400)
-            data = json.loads(raw.strip())
+            data = _parse_json(raw)
             insights.append(CrystallizedInsight(
                 agent_id=agent.agent_id,
                 insight=data.get("insight", ""),
