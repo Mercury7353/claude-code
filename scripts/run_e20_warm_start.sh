@@ -24,12 +24,13 @@ source /nfs/hpc/share/zhanyaol/miniconda3/etc/profile.d/conda.sh
 conda activate tool
 cd /nfs/hpc/share/zhanyaol/claude-code
 
-POOL_FILE="results/e17/evopool_pool_state.json"
+POOL_FILE="results/e21/evopool_pool_state.json"
 if [ ! -f "$POOL_FILE" ]; then
-    echo "ERROR: E17 pool state not found at $POOL_FILE"
-    echo "Run E17 with --save_pool first, or save manually."
+    echo "ERROR: E21 pool state not found at $POOL_FILE"
+    echo "Run E21 (run_e21_save_pool.sh) first."
     exit 1
 fi
+echo "Loading evolved pool from: $POOL_FILE"
 
 URL6=""
 URL7=""
