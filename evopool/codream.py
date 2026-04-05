@@ -145,6 +145,8 @@ def run_codream(
     max_imaginations_per_agent: int = 2,
     debate_rounds: int = 1,
     evaluator_fn=None,           # optional: fn(task, response) -> float, for insight verification
+    disable_l3: bool = False,    # E22 ablation: no cross-domain L3 broadcast
+    disable_l2: bool = False,    # E23 ablation: no subdomain L2 accumulation
 ) -> CoDreamSession | None:
     """
     Score-gated Co-Dream session with insight verification.
@@ -219,12 +221,14 @@ def run_codream(
             len(verified_insights) / len(insights) if insights else 0.0
         )
         session.insights = verified_insights
-        _apply_insights(team, verified_insights, task_domain=task_domain)
+        _apply_insights(team, verified_insights, task_domain=task_domain,
+                        disable_l3=disable_l3, disable_l2=disable_l2)
     else:
         session.n_insights_generated = len(insights)
         session.n_insights_verified = len(insights)  # no verify = all applied
         session.verify_rate = 1.0
-        _apply_insights(team, insights, task_domain=task_domain)
+        _apply_insights(team, insights, task_domain=task_domain,
+                        disable_l3=disable_l3, disable_l2=disable_l2)
 
     return session
 
@@ -813,6 +817,8 @@ def _apply_insights(
     team: list[Agent],
     insights: list[CrystallizedInsight],
     task_domain: str = "",
+    disable_l3: bool = False,
+    disable_l2: bool = False,
 ) -> None:
     """
     Apply crystallized insights to agent profiles.
@@ -834,6 +840,8 @@ def _apply_insights(
         # Subdomain insights (e.g. "for algebra: simplify fractions first") must NOT pollute
         # the persona — they would be applied to geometry/code/QA tasks where they are wrong.
         if insight.is_generalizable and insight.transferability == "general" and insight.insight:
+            if disable_l3:
+                continue  # E22 ablation: skip L3 broadcast entirely
             # Fix 2a: Broadcast general metacognitive insights to ALL team members.
             # A general strategy (e.g. "decompose into sub-problems then verify each step")
             # is equally valuable for every agent — not just the one who discovered it.
@@ -850,7 +858,7 @@ def _apply_insights(
 
         # Subdomain-scoped insights: store in agent.profile.subdomain_insights dict.
         # These will be injected into the task prompt ONLY when the task sub-domain matches.
-        if insight.transferability == "subdomain" and insight.insight and insight.domain_scope not in ("any", "general", ""):
+        if insight.transferability == "subdomain" and insight.insight and insight.domain_scope not in ("any", "general", "") and not disable_l2:
             if not hasattr(agent.profile, 'subdomain_insights'):
                 agent.profile.subdomain_insights = {}
             scope = insight.domain_scope.lower().replace(" ", "_").replace("-", "_")

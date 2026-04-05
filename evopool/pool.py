@@ -43,6 +43,9 @@ class PoolConfig:
     lifecycle_enabled: bool = True
     collab_score_enabled: bool = True
     codream_strength_threshold: float = 0.55
+    codream_disable_l3: bool = False    # E22 ablation: disable cross-domain L3 broadcast
+    codream_disable_l2: bool = False    # E23 ablation: disable subdomain L2 accumulation
+    team_selection_random: bool = False # E24 ablation: random team selection
     seed: int = 42
 
 
@@ -150,12 +153,16 @@ class EvoPool:
             result dict with scores, metrics, lifecycle events
         """
         # 1. Select team
-        team = select_team(
-            pool=self.pool,
-            task=task,
-            collab_table=self.collab_table,
-            k=self.config.team_size,
-        )
+        if self.config.team_selection_random:
+            import random as _random
+            team = _random.sample(self.pool, min(self.config.team_size, len(self.pool)))
+        else:
+            team = select_team(
+                pool=self.pool,
+                task=task,
+                collab_table=self.collab_table,
+                k=self.config.team_size,
+            )
 
         # 2. Execute task via MAS structure
         leader_id = None
@@ -235,6 +242,8 @@ class EvoPool:
             mode=self.config.codream_mode,
             strength_threshold=self.config.codream_strength_threshold,
             evaluator_fn=_single_response_eval if self.config.codream_mode != "none" else None,
+            disable_l3=self.config.codream_disable_l3,
+            disable_l2=self.config.codream_disable_l2,
         )
 
         # 6. Update collab table

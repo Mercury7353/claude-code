@@ -237,6 +237,10 @@ def _build_system(args):
     lifecycle_enabled = True
     collab_score_enabled = True
 
+    disable_l3 = False
+    disable_l2 = False
+    team_random = False
+
     if condition == "evopool_no_codream":
         codream_mode = "none"
     elif condition == "evopool_symmetric_codream":
@@ -245,6 +249,12 @@ def _build_system(args):
         lifecycle_enabled = False
     elif condition == "evopool_no_collab_score":
         collab_score_enabled = False
+    elif condition == "evopool_no_l3":
+        disable_l3 = True    # E22: CoDream L1+L2 only, no cross-domain broadcast
+    elif condition == "evopool_no_l2":
+        disable_l2 = True    # E23: CoDream L1+L3 only, no subdomain accumulation
+    elif condition == "evopool_random_team":
+        team_random = True   # E24: random team selection
     elif condition == "evopool_full":
         pass  # defaults
     elif condition == "evopool_cod_only":
@@ -260,6 +270,9 @@ def _build_system(args):
         backbone_llm=args.backbone_llm,
         lifecycle_enabled=lifecycle_enabled,
         collab_score_enabled=collab_score_enabled,
+        codream_disable_l3=disable_l3,
+        codream_disable_l2=disable_l2,
+        team_selection_random=team_random,
         seed=args.seed,
     )
 
