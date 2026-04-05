@@ -900,10 +900,15 @@ class TeamLeader:
                     import sys as _sys, traceback as _traceback
                     for tc in (task.get("test_cases") or [])[:3]:
                         try:
+                            import signal as _sig2
+                            _sig2.signal(_sig2.SIGALRM, _timeout_handler)
+                            _sig2.alarm(3)  # 3s timeout to prevent infinite loops
                             _g = {}
                             exec(current_code, _g)
                             exec(tc, _g)
+                            _sig2.alarm(0)
                         except Exception as _e:
+                            _sig2.alarm(0)
                             _tb = _traceback.format_exc().splitlines()[-3:]
                             error_msgs.append(f"Test: {str(tc)[:100]}\nError: {str(_e)[:200]}\n{''.join(_tb)[:200]}")
                             if len(error_msgs) >= 2:
@@ -912,6 +917,9 @@ class TeamLeader:
                     test_str = task.get("test", "")
                     if not error_msgs and test_str and entry_point:
                         try:
+                            import signal as _sig3
+                            _sig3.signal(_sig3.SIGALRM, _timeout_handler)
+                            _sig3.alarm(5)  # 5s timeout
                             _g2: dict = {}
                             exec(current_code, _g2)
                             exec(test_str, _g2)
@@ -922,7 +930,9 @@ class TeamLeader:
                             )
                             if _fn and "check" in _g2:
                                 _g2["check"](_fn)
+                            _sig3.alarm(0)
                         except Exception as _e:
+                            _sig3.alarm(0)
                             _tb = _traceback.format_exc().splitlines()[-3:]
                             error_msgs.append(f"Test failed: {str(_e)[:200]}\n{''.join(_tb)[:200]}")
                     error_section = ""
