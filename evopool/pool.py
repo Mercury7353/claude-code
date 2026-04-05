@@ -43,9 +43,11 @@ class PoolConfig:
     lifecycle_enabled: bool = True
     collab_score_enabled: bool = True
     codream_strength_threshold: float = 0.55
-    codream_disable_l3: bool = False    # E22 ablation: disable cross-domain L3 broadcast
-    codream_disable_l2: bool = False    # E23 ablation: disable subdomain L2 accumulation
-    team_selection_random: bool = False # E24 ablation: random team selection
+    codream_disable_l3: bool = False     # E22 ablation: disable cross-domain L3 broadcast
+    codream_disable_l2: bool = False     # E23 ablation: disable subdomain L2 accumulation
+    team_selection_random: bool = False  # E24 ablation: random team selection
+    codream_enhanced: bool = False       # E25: disagreement trigger + success extraction + domain_general
+    codream_no_verify: bool = False      # E27: skip verify gate, apply all insights directly
     seed: int = 42
 
 
@@ -234,6 +236,11 @@ class EvoPool:
             except Exception:
                 return 0.0
 
+        # E27: no-verify mode skips the verify gate (evaluator_fn=None → apply all insights)
+        use_evaluator = (
+            self.config.codream_mode != "none"
+            and not self.config.codream_no_verify
+        )
         codream_session = run_codream(
             team=team,
             task=task,
@@ -241,9 +248,10 @@ class EvoPool:
             backbone_llm=self.config.backbone_llm,
             mode=self.config.codream_mode,
             strength_threshold=self.config.codream_strength_threshold,
-            evaluator_fn=_single_response_eval if self.config.codream_mode != "none" else None,
+            evaluator_fn=_single_response_eval if use_evaluator else None,
             disable_l3=self.config.codream_disable_l3,
             disable_l2=self.config.codream_disable_l2,
+            enhanced=self.config.codream_enhanced,
         )
 
         # 6. Update collab table

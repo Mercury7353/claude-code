@@ -260,11 +260,18 @@ def _build_system(args):
         team_random = True   # E24: random team selection
     elif condition == "evopool_full":
         pass  # defaults
+    elif condition == "evopool_enhanced_codream":
+        pass  # E25: enhanced CoDream (set below via codream_enhanced=True)
+    elif condition == "evopool_no_verify":
+        pass  # E27: skip verify gate
     elif condition == "evopool_cod_only":
         lifecycle_enabled = False
         collab_score_enabled = False
     else:
         raise ValueError(f"Unknown condition: {condition}")
+
+    codream_enhanced = (condition == "evopool_enhanced_codream")
+    codream_no_verify = (condition == "evopool_no_verify")
 
     config = PoolConfig(
         pool_size_init=args.pool_size,
@@ -276,6 +283,8 @@ def _build_system(args):
         codream_disable_l3=disable_l3,
         codream_disable_l2=disable_l2,
         team_selection_random=team_random,
+        codream_enhanced=codream_enhanced,
+        codream_no_verify=codream_no_verify,
         seed=args.seed,
     )
 
