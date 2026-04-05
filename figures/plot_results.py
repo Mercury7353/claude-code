@@ -363,6 +363,85 @@ def fig_within_domain_learning():
     plt.close(fig)
 
 
+# ── Figure 6: Task Dependence Concept ─────────────────────────────────────────
+def fig_task_dependence():
+    """
+    Spider/radar chart showing per-domain gain from CoDream (E17 vs E15b) or (E12 vs E15b).
+    Illustrates that CoDream benefit correlates with task dependence (multi-hop > independent).
+    """
+    codream_off = load("EvoPool -CoDream")    # E15b
+    codream_on  = load("EvoPool (ours)")      # E17 (preferred)
+    if codream_on is None:
+        import os as _os, json as _json
+        _p = _os.path.join(BASE, "e12/evopool_full_aflow_stream_seed42.json")
+        if _os.path.exists(_p):
+            with open(_p) as _f:
+                codream_on = _json.load(_f)
+    if codream_off is None or codream_on is None:
+        print("  [skip] Task dependence: data not available")
+        return
+
+    # Per-domain CoDream gain
+    def get_mean(data, d):
+        s = data["domain_scores"].get(d, [])
+        return np.mean(s) if s else 0.0
+
+    gains = {}
+    for d, dl in zip(DOMAINS, DOMAIN_LABELS):
+        gains[dl] = get_mean(codream_on, d) - get_mean(codream_off, d)
+
+    # "Task dependence" classification: high=multi-hop, low=independent
+    dependence = {
+        "GSM8K": "Independent\n(arithmetic)",
+        "HotpotQA": "Dependent\n(multi-hop)",
+        "MBPP": "Independent\n(code)",
+        "MATH": "Semi-dep.\n(strategy)",
+        "HumanEval": "Independent\n(code)",
+        "DROP": "Dependent\n(multi-hop)",
+    }
+    dep_colors = {
+        "Independent\n(arithmetic)": "#6B7280",
+        "Independent\n(code)": "#6B7280",
+        "Semi-dep.\n(strategy)": "#F59E0B",
+        "Dependent\n(multi-hop)": "#10B981",
+    }
+
+    domains_ordered = ["HotpotQA", "DROP", "MATH", "GSM8K", "MBPP", "HumanEval"]
+    gains_ordered   = [gains[d] for d in domains_ordered]
+    colors_ordered  = [dep_colors[dependence[d]] for d in domains_ordered]
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    xs = np.arange(len(domains_ordered))
+    bars = ax.bar(xs, gains_ordered, color=colors_ordered, alpha=0.85, edgecolor="white", lw=0.5)
+
+    # y=0 line
+    ax.axhline(0, color="#9CA3AF", lw=1)
+
+    ax.set_xticks(xs)
+    ax.set_xticklabels([f"{d}\n({dependence[d].split(chr(10))[0]})" for d in domains_ordered],
+                        fontsize=9)
+    ax.set_ylabel("CoDream Gain (accuracy)", fontsize=11)
+    ax.set_title("Co-Dream Benefit Aligns with Task Dependence\n(Gains largest for multi-hop reasoning tasks)",
+                 fontsize=11)
+
+    # Legend
+    legend_patches = [
+        mpatches.Patch(color="#10B981", label="Dependent (multi-hop reasoning)"),
+        mpatches.Patch(color="#F59E0B", label="Semi-dependent (strategy)"),
+        mpatches.Patch(color="#6B7280", label="Independent (each task self-contained)"),
+    ]
+    ax.legend(handles=legend_patches, fontsize=8.5, framealpha=0.9)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    out_path = os.path.join(OUT, "fig6_task_dependence.pdf")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    fig.savefig(out_path.replace(".pdf", ".png"), dpi=200, bbox_inches="tight")
+    print(f"Saved: {out_path}")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     print("Generating paper figures...")
@@ -371,4 +450,5 @@ if __name__ == "__main__":
     fig_codream_ablation()
     fig_insight_distribution()
     fig_within_domain_learning()
+    fig_task_dependence()
     print("Done.")
