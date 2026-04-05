@@ -199,7 +199,8 @@ class Agent:
         domain = task.get("domain", "")
         task_type = task.get("type", "")
         is_code = domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion")
-        # Add format hint for math self-consistency
+        is_qa = domain in ("hotpotqa", "drop") or task_type in ("multi_hop_qa", "reading_comprehension")
+        # Add format hint for self-consistency paths (math/QA)
         if domain == "gsm8k" or task_type == "math_word_problem":
             user_prompt = user_prompt + "\n\nSolve step by step. End your answer with: #### <final number>"
         elif task_type in ("math_competition", "arithmetic") or domain == "math":
@@ -209,6 +210,12 @@ class Agent:
                 "by checking it against the original problem or using an alternative approach. "
                 "Express your final answer in LaTeX inside \\boxed{}. "
                 "For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
+            )
+        elif is_qa:
+            user_prompt = (
+                user_prompt
+                + "\n\nProvide a concise, direct answer. Answer with only the key entity, "
+                "number, or short phrase — do not explain or repeat the question."
             )
 
         # Fix 1 + Fix 3: inject scoped subdomain hints and working memory for math/QA tasks.
