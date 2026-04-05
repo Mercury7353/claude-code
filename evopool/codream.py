@@ -91,6 +91,11 @@ class CrystallizedInsight:
     skill_updates: dict[str, float]   # domain -> delta (can be positive or negative)
     new_hypotheses: list[str]         # new beliefs/hypotheses to test in future tasks
     is_generalizable: bool = False    # True = cross-domain reasoning strategy (apply everywhere)
+    # Fix 1 (scope tagging): explicit transferability classification prevents premature
+    # generalization where sub-domain insights (e.g. "algebra: simplify fractions first")
+    # pollute agents solving geometry or combinatorics tasks via persona injection.
+    transferability: str = "general"  # "general" | "subdomain" | "task_specific"
+    domain_scope: str = "any"         # e.g. "algebra", "geometry", "code_generation", "any"
 
 
 @dataclass
@@ -313,25 +318,41 @@ def _phase_crystallize_from_reflections(
             + "Based on this failure pattern and your team's observations, what is ONE concrete "
             "strategy update you are taking away? Be specific — name the type of mistake and "
             "the exact fix.\n\n"
-            "Then judge: is this insight a GENERAL reasoning strategy (applies to any task type, "
-            "e.g. 'decompose into sub-problems and verify each step') or DOMAIN-SPECIFIC "
-            "(e.g. 'for fraction problems, simplify before solving')?\n\n"
+            "Then classify the transferability of this insight using THREE levels:\n"
+            '  - "general": a metacognitive process strategy that works on ANY task type\n'
+            '    (e.g. "decompose into sub-problems", "verify each step", "re-read the question")\n'
+            '  - "subdomain": only applies to a SPECIFIC sub-domain within this domain\n'
+            '    (e.g. "for ALGEBRA fraction problems: simplify first" is subdomain=algebra,\n'
+            '     but would be WRONG for geometry or combinatorics problems)\n'
+            '  - "task_specific": only applies to this exact problem type; not transferable\n\n'
+            "IMPORTANT: If the insight references a specific technique only valid for one "
+            "sub-topic (algebra, geometry, fractions, recursion, string manipulation, etc.), "
+            'classify it as "subdomain", NOT "general". Only classify as "general" if the '
+            "strategy would improve performance on math AND code AND QA equally.\n\n"
             "Respond with JSON:\n"
             "{\n"
             '  "insight": "one concrete lesson (2 sentences max)",\n'
-            '  "is_generalizable": true/false,\n'
+            '  "transferability": "general" | "subdomain" | "task_specific",\n'
+            '  "domain_scope": "any" if transferability=general else "specific_subdomain_name",\n'
+            '  "is_generalizable": true if transferability=="general" else false,\n'
             '  "affected_domains": ["all"] if generalizable else ["domain1"],\n'
             '  "skill_updates": {"domain1": 0.05},\n'
             '  "new_hypotheses": ["hypothesis"]\n'
             "}"
         )
         try:
-            raw = llm_call(model=backbone_llm, user=prompt, max_tokens=300)
+            raw = llm_call(model=backbone_llm, user=prompt, max_tokens=350)
             data = json.loads(raw.strip())
+            transferability = data.get("transferability", "general")
+            domain_scope = data.get("domain_scope", "any")
+            # Enforce consistency: subdomain/task_specific insights are NOT generalizable
+            is_gen = (transferability == "general")
             insights.append(CrystallizedInsight(
                 agent_id=agent.agent_id,
                 insight=data.get("insight", ""),
-                is_generalizable=bool(data.get("is_generalizable", False)),
+                is_generalizable=is_gen,
+                transferability=transferability,
+                domain_scope=domain_scope,
                 affected_domains=data.get("affected_domains", []),
                 skill_updates=data.get("skill_updates", {}),
                 new_hypotheses=data.get("new_hypotheses", []),
@@ -762,20 +783,29 @@ def _apply_insights(
         if agent is None:
             continue
 
-        # Generalizable insights: cross-domain reasoning strategies that apply to all tasks.
-        # These bypass domain filtering and are written directly into the agent's persona
-        # so they influence future task execution regardless of domain.
-        if insight.is_generalizable and insight.insight:
+        # Generalizable insights: cross-domain metacognitive strategies that apply to all tasks.
+        # ONLY write to persona if transferability=="general" (Fix 1: stricter scope check).
+        # Subdomain insights (e.g. "for algebra: simplify fractions first") must NOT pollute
+        # the persona — they would be applied to geometry/code/QA tasks where they are wrong.
+        if insight.is_generalizable and insight.transferability == "general" and insight.insight:
             _append_to_persona(agent, insight.insight, tag="[General strategy]")
-            # Also store in hypotheses for visibility
             if not hasattr(agent.profile, 'hypotheses'):
                 agent.profile.hypotheses = []
             agent.profile.hypotheses = (
                 getattr(agent.profile, 'hypotheses', []) + [insight.insight]
             )[-5:]
-            # Don't apply skill_updates for generalizable insights — they are reasoning
-            # strategies, not domain-specific competency signals
             continue
+
+        # Subdomain-scoped insights: store in agent.profile.subdomain_insights dict.
+        # These will be injected into the task prompt ONLY when the task sub-domain matches.
+        if insight.transferability == "subdomain" and insight.insight and insight.domain_scope not in ("any", "general", ""):
+            if not hasattr(agent.profile, 'subdomain_insights'):
+                agent.profile.subdomain_insights = {}
+            scope = insight.domain_scope.lower().replace(" ", "_").replace("-", "_")
+            existing = agent.profile.subdomain_insights.get(scope, [])
+            # Keep at most 3 scoped insights per subdomain to avoid prompt bloat
+            agent.profile.subdomain_insights[scope] = (existing + [insight.insight])[-3:]
+            # Also update skill_memory within the domain (fall through to skill update below)
 
         # Domain-specific insights: apply skill updates (bounded, domain-constrained)
         for domain, delta in insight.skill_updates.items():

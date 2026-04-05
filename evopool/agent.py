@@ -164,6 +164,13 @@ class Agent:
                 subtask_prompt
                 + "\n\nProvide a concise, direct answer. Do not repeat the question."
             )
+        # Fix 1: inject scoped subdomain insights when sub-domain matches current task.
+        # Skip for code tasks (format-sensitive) and reviews.
+        if not is_code_task and not is_review:
+            subdomain_hint = _get_subdomain_hint(self.profile, task)
+            if subdomain_hint:
+                subtask_prompt = subdomain_hint + "\n\n" + subtask_prompt
+
         user_prompt = subtask_prompt
         if context:
             user_prompt = f"Context from teammates:\n{context}\n\n---\nYour task:\n{subtask_prompt}"
@@ -339,3 +346,57 @@ class Agent:
         agent.task_count = d.get("task_count", 0)
         agent.consecutive_underperformance = d.get("consecutive_underperformance", 0)
         return agent
+
+
+# ------------------------------------------------------------------
+# Fix 1: Subdomain insight injection helper
+# ------------------------------------------------------------------
+
+# Map task domain/type → candidate subdomain keys to look up in subdomain_insights.
+# E.g. a MATH task might match "algebra", "geometry", "combinatorics", etc.
+# We use the task's type/domain + question text keywords to guess the sub-domain.
+_SUBDOMAIN_KEYWORDS: dict[str, list[str]] = {
+    "algebra": ["equation", "polynomial", "linear", "quadratic", "variable", "solve for", "simplify"],
+    "geometry": ["triangle", "circle", "angle", "area", "perimeter", "polygon", "radius", "chord"],
+    "combinatorics": ["combination", "permutation", "probability", "ways to", "how many", "arrange", "choose"],
+    "number_theory": ["prime", "divisible", "gcd", "lcm", "remainder", "modulo", "factor"],
+    "arithmetic": ["fraction", "decimal", "percentage", "ratio", "proportion"],
+    "string_manipulation": ["string", "substring", "palindrome", "anagram", "character"],
+    "recursion": ["recursion", "recursive", "fibonacci", "factorial", "base case"],
+    "sorting": ["sort", "sorted", "order", "ascending", "descending"],
+    "multi_hop_qa": ["multiple", "step", "follow-up", "chain"],
+}
+
+
+def _get_subdomain_hint(profile: "AgentProfile", task: dict) -> str:
+    """
+    Look up subdomain_insights stored on this agent's profile and return a
+    formatted hint string if any scoped insights match the current task's sub-domain.
+
+    Only called for non-code, non-review tasks (Fix 1 injection).
+    """
+    subdomain_insights: dict = getattr(profile, 'subdomain_insights', {})
+    if not subdomain_insights:
+        return ""
+
+    # Get task text to do keyword matching
+    task_text = (
+        task.get("prompt", "") + " " +
+        task.get("question", "") + " " +
+        task.get("type", "")
+    ).lower()
+
+    matched_insights: list[str] = []
+    for scope, insights in subdomain_insights.items():
+        # Check if any keywords for this scope appear in the task
+        keywords = _SUBDOMAIN_KEYWORDS.get(scope, [scope.replace("_", " ")])
+        if any(kw in task_text for kw in keywords):
+            matched_insights.extend(insights)
+
+    if not matched_insights:
+        return ""
+
+    hint = "[Scoped strategy from past experience — apply only if relevant to this sub-topic]:\n"
+    hint += "\n".join(f"- {ins}" for ins in matched_insights[:2])  # max 2 to avoid bloat
+    return hint
+
