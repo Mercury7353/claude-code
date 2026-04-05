@@ -115,6 +115,9 @@ def main():
                 "domain": domain,
                 "score": score,
                 "lifecycle_events": result.get("lifecycle_events", []),
+                "codream_generated": result.get("codream_generated", 0),
+                "codream_verified": result.get("codream_verified", 0),
+                "codream_verify_rate": result.get("codream_verify_rate", 0.0),
             }
             # Store final_answer for code tasks to aid debugging
             if domain in ("humaneval", "mbpp") and "final_answer" in result:
