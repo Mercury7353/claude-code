@@ -20,6 +20,8 @@ EXPERIMENTS = {
     "EvoPool-noL3 (E22)":        "e22/evopool_no_l3_aflow_stream_seed42.json",
     "EvoPool-noL2 (E23)":        "e23/evopool_no_l2_aflow_stream_seed42.json",
     "EvoPool-randTeam (E24)":    "e24/evopool_random_team_aflow_stream_seed42.json",
+    # --- Enhanced CoDream (E25) ---
+    "EvoPool-enh_codream (E25)": "e25/evopool_enhanced_codream_aflow_stream_seed42.json",
     # --- Reference / older ---
     "AFlow (E9, buggy fmt)":     "e9/aflow_aflow_stream_seed42.json",
 }
@@ -203,7 +205,72 @@ def codream_gains():
     print("="*90)
 
 
+def analyze_e25_vs_e17():
+    """Compare E25 enhanced CoDream vs E17 standard, focusing on independent tasks."""
+    e17 = load("e17/evopool_full_aflow_stream_seed42.json")
+    e25 = load("e25/evopool_enhanced_codream_aflow_stream_seed42.json")
+
+    if e17 is None:
+        print("E17 not found")
+        return
+    if e25 is None:
+        print("E25 not yet complete")
+        return
+
+    print("\n" + "="*80)
+    print("E25 Enhanced CoDream vs E17 Standard CoDream")
+    print("Focus: Independent tasks (MATH/GSM8K/MBPP/HE) — target of E25 improvements")
+    print("="*80)
+
+    def q_trend(data, domain):
+        tasks = [t for t in data.get("per_task_results", []) if t.get("domain") == domain]
+        if len(tasks) < 25: return None, None, None
+        q1 = sum(t["score"] for t in tasks[:25]) / 25
+        q4 = sum(t["score"] for t in tasks[75:100]) / 25 if len(tasks) >= 100 else sum(t["score"] for t in tasks[-25:]) / 25
+        return q1, q4, q4 - q1
+
+    print(f"\n{'Domain':12s}  {'E17 Q1':>8} {'E17 Q4':>8} {'E17 Δ':>8}  {'E25 Q1':>8} {'E25 Q4':>8} {'E25 Δ':>8}  {'Mean Δ':>8}")
+    for dom in DOMAINS:
+        e17_q1, e17_q4, e17_t = q_trend(e17, dom)
+        e25_q1, e25_q4, e25_t = q_trend(e25, dom)
+        e17_mean = sum(e17["domain_scores"].get(dom,[0]))/max(1,len(e17["domain_scores"].get(dom,[1])))
+        e25_mean = sum(e25["domain_scores"].get(dom,[0]))/max(1,len(e25["domain_scores"].get(dom,[1])))
+        mean_delta = e25_mean - e17_mean
+        if e17_q1 is not None and e25_q1 is not None:
+            print(f"{dom:12s}  {e17_q1:8.3f} {e17_q4:8.3f} {e17_t:+8.3f}  {e25_q1:8.3f} {e25_q4:8.3f} {e25_t:+8.3f}  {mean_delta:+8.3f}")
+        else:
+            print(f"{dom:12s}  {'N/A':>8}")
+
+    e17_overall = e17["summary"]["mean_score"]
+    e25_overall = e25["summary"]["mean_score"]
+    print(f"\nOverall: E17={e17_overall:.3f}  E25={e25_overall:.3f}  Δ={e25_overall-e17_overall:+.3f}")
+
+    # CoDream stats from E25 (has verify stats)
+    print("\n--- CoDream trigger stats (E25, from per_task_results) ---")
+    from collections import defaultdict
+    dom_stats = defaultdict(lambda: {"tasks": 0, "triggered": 0, "gen": 0, "ver": 0})
+    for t in e25.get("per_task_results", []):
+        dom = t.get("domain", "unk")
+        dom_stats[dom]["tasks"] += 1
+        gen = t.get("codream_generated", 0)
+        ver = t.get("codream_verified", 0)
+        dom_stats[dom]["gen"] += gen
+        dom_stats[dom]["ver"] += ver
+        if gen > 0:
+            dom_stats[dom]["triggered"] += 1
+    print(f"{'Domain':12s}  {'tasks':>6} {'triggered':>10} {'trig%':>7} {'gen':>6} {'ver':>6} {'ver%':>7}")
+    for dom in DOMAINS:
+        s = dom_stats[dom]
+        if s["tasks"] == 0: continue
+        trate = s["triggered"] / s["tasks"]
+        vrate = s["ver"] / s["gen"] if s["gen"] > 0 else 0
+        print(f"{dom:12s}  {s['tasks']:6d} {s['triggered']:10d} {trate:7.2f} {s['gen']:6d} {s['ver']:6d} {vrate:7.2f}")
+
+    print("="*80)
+
+
 if __name__ == "__main__":
     print_table()
     quartile_trends()
     codream_gains()
+    analyze_e25_vs_e17()
