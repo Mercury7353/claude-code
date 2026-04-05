@@ -14,7 +14,6 @@ EXPERIMENTS = {
     "EvoPool fix1 (E12)":     "e12/evopool_full_aflow_stream_seed42.json",
     "DyLAN (E13)":            "e13/dylan_aflow_stream_seed42.json",
     "EvoPool noCoDream (E15)":"e15/evopool_no_codream_aflow_stream_seed42.json",
-    "EvoPool fix1 (E11b)":    "e11b/evopool_full_aflow_stream_seed42.json",
     "EvoPool fix2 (E16)":     "e16/evopool_full_aflow_stream_seed42.json",
     "EvoPool noCoDream (E6)": "e6/evopool_no_codream_aflow_stream_seed42.json",
 }
