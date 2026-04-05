@@ -156,17 +156,22 @@ def run_codream(
     scores = {aid: r.get("score", 0.0) for aid, r in task_results.items()}
     team_score = sum(scores.values()) / max(len(scores), 1) if scores else 0.0
 
-    # Build shared context (include recent failure history for pattern-grounded crystallize)
-    task_context = _build_task_context(task, task_results)
-
-    # --- Phase 1: REFLECT (always) ---
-    reflections = _phase_reflect(team, task_context, task_results, backbone_llm)
-    session.reflections = reflections
-
+    # Fast-path for successes: skip Co-Dream entirely.
+    # On successful tasks the reflections are generated but discarded (no crystallization),
+    # wasting 3 LLM calls per task.  At ~84% overall accuracy and 600 tasks this is ~1500
+    # wasted calls (≈50-75 min).  Skipping saves significant wall-clock time with no loss
+    # in learning because successful tasks don't produce insights anyway.
     if team_score >= _CODREAM_SUCCESS_THRESHOLD:
         return session
 
-    # Failure path: CRYSTALLIZE with domain failure history
+    # Build shared context (include recent failure history for pattern-grounded crystallize)
+    task_context = _build_task_context(task, task_results)
+
+    # --- Phase 1: REFLECT (failure path only) ---
+    reflections = _phase_reflect(team, task_context, task_results, backbone_llm)
+    session.reflections = reflections
+
+    # Failure path — CRYSTALLIZE directly from reflections
     insights = _phase_crystallize_from_reflections(
         team=team,
         reflections=reflections,
