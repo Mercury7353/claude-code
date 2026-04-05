@@ -147,6 +147,7 @@ def run_codream(
     evaluator_fn=None,           # optional: fn(task, response) -> float, for insight verification
     disable_l3: bool = False,    # E22 ablation: no cross-domain L3 broadcast
     disable_l2: bool = False,    # E23 ablation: no subdomain L2 accumulation
+    enhanced: bool = False,      # E25: disagreement trigger + success extraction + domain_general
 ) -> CoDreamSession | None:
     """
     Score-gated Co-Dream session with insight verification.
@@ -173,16 +174,24 @@ def run_codream(
     task_domain = task.get("domain", task.get("type", ""))
     session = CoDreamSession(task_id=task_id, team_ids=[a.agent_id for a in team])
 
-    # Compute team score to decide which path to take
+    # Compute per-agent scores and team average
     scores = {aid: r.get("score", 0.0) for aid, r in task_results.items()}
     team_score = sum(scores.values()) / max(len(scores), 1) if scores else 0.0
 
-    # Fast-path for successes: skip Co-Dream entirely.
-    # On successful tasks the reflections are generated but discarded (no crystallization),
-    # wasting 3 LLM calls per task.  At ~84% overall accuracy and 600 tasks this is ~1500
-    # wasted calls (≈50-75 min).  Skipping saves significant wall-clock time with no loss
-    # in learning because successful tasks don't produce insights anyway.
-    if team_score >= _CODREAM_SUCCESS_THRESHOLD:
+    # Disagreement detection (E25 enhanced mode):
+    # When some agents succeed and others fail on the SAME task (max-min >= 0.5),
+    # this is the richest learning signal for independent tasks — the failing agent
+    # can learn from the successful agent's strategy via CONTRAST.
+    # E.g. [0,1,1] team: avg=0.67 > threshold, but the 0-agent is missing something.
+    score_vals = list(scores.values())
+    disagreement = (
+        enhanced
+        and len(score_vals) > 1
+        and (max(score_vals) - min(score_vals)) >= 0.5
+    )
+
+    # Fast-path: skip only if team succeeded AND no disagreement between agents
+    if team_score >= _CODREAM_SUCCESS_THRESHOLD and not disagreement:
         return session
 
     # Build shared context (include recent failure history for pattern-grounded crystallize)
@@ -200,6 +209,7 @@ def run_codream(
         backbone_llm=backbone_llm,
         mode=mode,
         strength_threshold=strength_threshold,
+        scores=scores if enhanced else None,
     )
     session.insights = insights
 
@@ -300,6 +310,7 @@ def _phase_crystallize_from_reflections(
     backbone_llm: str,
     mode: str,
     strength_threshold: float,
+    scores: dict | None = None,
 ) -> list[CrystallizedInsight]:
     """
     Simplified crystallize: distill insights directly from reflections,
@@ -351,44 +362,67 @@ def _phase_crystallize_from_reflections(
                 + "\n\n"
             )
 
-        prompt = (
-            f"You are {agent.profile.persona}\n"
-            f"Your current skills: {agent.profile.skill_memory}\n\n"
-            f"Task context (you FAILED this): {task_context}\n\n"
-            + failure_history_str
-            + f"Your reflection: {my_reflection.content}\n\n"
-            + (f"Peer observations:\n" + "\n".join(peer_material) + "\n\n" if peer_material else "")
-            + "Based on this failure pattern and your team's observations, what is ONE concrete "
-            "strategy update you are taking away? Be specific — name the type of mistake and "
-            "the exact fix.\n\n"
-            "Then classify the transferability of this insight using THREE levels:\n"
-            '  - "general": a metacognitive process strategy that works on ANY task type\n'
-            '    (e.g. "decompose into sub-problems", "verify each step", "re-read the question")\n'
-            '  - "subdomain": only applies to a SPECIFIC sub-domain within this domain\n'
-            '    (e.g. "for ALGEBRA fraction problems: simplify first" is subdomain=algebra,\n'
-            '     but would be WRONG for geometry or combinatorics problems)\n'
-            '  - "task_specific": only applies to this exact problem type; not transferable\n\n'
-            "IMPORTANT: To classify transferability, ask yourself these THREE questions:\n"
-            "  Q1: Would this insight help me solve a Python coding problem? (yes/no)\n"
-            "  Q2: Would this insight help me answer a multi-hop QA question? (yes/no)\n"
-            "  Q3: Would this insight help me solve a competition math problem? (yes/no)\n"
-            'If all three answers are YES → "general"\n'
-            'If only same-domain answers are YES → "subdomain"\n'
-            'If neither or just this specific problem type → "task_specific"\n\n'
-            "Example: 'For fraction problems, simplify before solving' → Q1=no, Q2=no, Q3=maybe "
-            "for fractions only → subdomain=fractions\n"
-            "Example: 'Read the question twice before answering' → Q1=yes, Q2=yes, Q3=yes → general\n\n"
-            "Respond with JSON:\n"
-            "{\n"
-            '  "insight": "one concrete lesson (2 sentences max)",\n'
-            '  "transferability": "general" | "subdomain" | "task_specific",\n'
-            '  "domain_scope": "any" if transferability=general else "specific_subdomain_name",\n'
-            '  "is_generalizable": true if transferability=="general" else false,\n'
-            '  "affected_domains": ["all"] if generalizable else ["domain1"],\n'
-            '  "skill_updates": {"domain1": 0.05},\n'
-            '  "new_hypotheses": ["hypothesis"]\n'
-            "}"
-        )
+        my_score = scores.get(agent.agent_id, 0.0) if scores else 0.0
+        agent_succeeded = my_score >= 0.7
+
+        if agent_succeeded:
+            # Success extraction: articulate what worked for reuse by teammates
+            prompt = (
+                f"You are {agent.profile.persona}\n"
+                f"Your current skills: {agent.profile.skill_memory}\n\n"
+                f"Task context (you SUCCEEDED, score: {my_score:.1f}): {task_context}\n\n"
+                f"Your reflection: {my_reflection.content}\n\n"
+                + (f"Teammate(s) FAILED. Their observations:\n"
+                   + "\n".join(peer_material) + "\n\n" if peer_material else "")
+                + "You solved this while some teammates did not. Articulate the KEY STRATEGY "
+                "that made the difference — something reusable for similar problems.\n\n"
+                "Classify using FOUR levels:\n"
+                '  - "general": works on ANY task (coding, QA, math, anything)\n'
+                '  - "domain_general": useful for ALL tasks in this broad domain\n'
+                '    (e.g. "for any math: verify by substitution" → domain_general=math)\n'
+                '    (e.g. "for any code: check edge cases first" → domain_general=code)\n'
+                '  - "subdomain": only a specific sub-topic in this domain\n'
+                '  - "task_specific": only this exact problem\n\n'
+                "Q1: Help ANY coding task? Q2: Help ANY multi-hop QA? Q3: Help ANY math?\n"
+                'All YES → "general" | Same domain only → "domain_general" | '
+                'Sub-topic only → "subdomain" | Just this → "task_specific"\n\n'
+                "Respond with JSON:\n"
+                '{"insight": "strategy (2 sentences max)", '
+                '"transferability": "general"|"domain_general"|"subdomain"|"task_specific", '
+                '"domain_scope": "any" or "<domain>" or "<subtopic>", '
+                '"is_generalizable": true/false, "affected_domains": [...], '
+                '"skill_updates": {"domain": 0.05}, "new_hypotheses": ["..."]}'
+            )
+        else:
+            # Failure crystallize: what went wrong and how to fix it
+            prompt = (
+                f"You are {agent.profile.persona}\n"
+                f"Your current skills: {agent.profile.skill_memory}\n\n"
+                f"Task context (you FAILED, score: {my_score:.1f}): {task_context}\n\n"
+                + failure_history_str
+                + f"Your reflection: {my_reflection.content}\n\n"
+                + (f"Peer observations (some may have succeeded):\n"
+                   + "\n".join(peer_material) + "\n\n" if peer_material else "")
+                + "What is ONE concrete strategy update from this failure? Name the mistake and fix.\n\n"
+                "Classify using FOUR levels:\n"
+                '  - "general": metacognitive strategy that works on ANY task type\n'
+                '  - "domain_general": useful for ALL tasks in this broad domain\n'
+                '    (e.g. "for all math: try special cases first" → domain_general=math)\n'
+                '  - "subdomain": only a SPECIFIC sub-topic in this domain\n'
+                '  - "task_specific": only this exact problem type\n\n'
+                "Q1: Help ANY coding task? Q2: Help ANY QA task? Q3: Help ANY math task?\n"
+                'All YES → "general" | Same domain only → "domain_general" | '
+                'Sub-topic only → "subdomain" | Just this → "task_specific"\n\n'
+                "Example: 'For fraction problems, simplify first' → subdomain=fractions\n"
+                "Example: 'For ANY math: verify answer by substitution' → domain_general, scope=math\n"
+                "Example: 'Read question twice before answering' → general\n\n"
+                "Respond with JSON:\n"
+                '{"insight": "lesson (2 sentences max)", '
+                '"transferability": "general"|"domain_general"|"subdomain"|"task_specific", '
+                '"domain_scope": "any" or "<domain>" or "<subtopic>", '
+                '"is_generalizable": true/false, "affected_domains": [...], '
+                '"skill_updates": {"domain": 0.05}, "new_hypotheses": ["..."]}'
+            )
         try:
             raw = llm_call(model=backbone_llm, user=prompt, max_tokens=350)
             data = _parse_json(raw)
@@ -855,6 +889,24 @@ def _apply_insights(
                 getattr(agent.profile, 'hypotheses', []) + [insight.insight]
             )[-5:]
             continue
+
+        # domain_general insights (L2.5): useful for ALL tasks in the same broad domain.
+        # E.g. "for any math: verify answer by substitution" applies to all MATH tasks.
+        # Stored per top-level domain (math/code/qa), injected whenever task is in that domain.
+        if insight.transferability == "domain_general" and insight.insight and not disable_l2:
+            if not hasattr(agent.profile, 'domain_insights'):
+                agent.profile.domain_insights = {}
+            # scope = top-level domain name (e.g. "math", "code", "qa")
+            scope = insight.domain_scope.lower().strip() or task_domain.lower().strip()
+            # Normalize to top-level domain using cluster map
+            for cluster_name, cluster_set in _DOMAIN_CLUSTERS.items():
+                if scope in cluster_set or scope == cluster_name:
+                    scope = cluster_name
+                    break
+            existing = agent.profile.domain_insights.get(scope, [])
+            fingerprint = insight.insight.strip().lower()[:40]
+            if not any(fingerprint in s.lower() for s in existing):
+                agent.profile.domain_insights[scope] = (existing + [insight.insight])[-3:]
 
         # Subdomain-scoped insights: store in agent.profile.subdomain_insights dict.
         # These will be injected into the task prompt ONLY when the task sub-domain matches.
