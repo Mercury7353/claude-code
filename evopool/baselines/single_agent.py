@@ -94,6 +94,7 @@ class SingleAgentPool:
 
         return {
             "task_index": self.task_index,
+            "team_score": score,   # matches EvoPool interface expected by run_experiment.py
             "score": score,
             "domain": task.get("domain", ""),
             "response": response,
