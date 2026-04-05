@@ -1,36 +1,24 @@
 #!/bin/bash
-#SBATCH -J vllm_qwen3_8b
+#SBATCH -J vllm_qwen3_8b_5
 #SBATCH -A hw-grp
 #SBATCH -p dgxh
 #SBATCH --gres=gpu:1
 #SBATCH -t 12:00:00
 #SBATCH --mem=48G
 #SBATCH -c 8
-#SBATCH -o /nfs/hpc/share/zhanyaol/claude-code/logs/vllm_%j.out
-#SBATCH -e /nfs/hpc/share/zhanyaol/claude-code/logs/vllm_%j.err
+#SBATCH -o /nfs/hpc/share/zhanyaol/claude-code/logs/vllm5_%j.out
+#SBATCH -e /nfs/hpc/share/zhanyaol/claude-code/logs/vllm5_%j.err
 
 MODEL_PATH="/nfs/hpc/share/zhanyaol/models/Qwen3-8B"
-PORT=8000
-SERVER_FILE="/nfs/hpc/share/zhanyaol/claude-code/vllm_server.json"
+PORT=8004
+SERVER_FILE="/nfs/hpc/share/zhanyaol/claude-code/vllm_server_5.json"
 
-echo "=== vLLM Server: Qwen3-8B ==="
+echo "=== vLLM Server 5: Qwen3-8B port $PORT ==="
 echo "Job ID: $SLURM_JOB_ID | Node: $SLURMD_NODENAME | Start: $(date)"
-echo "Model: $MODEL_PATH"
 
 module load cuda/12.1 2>/dev/null || true
-
 source /nfs/hpc/share/zhanyaol/miniconda3/etc/profile.d/conda.sh
 conda activate tool
-
-# Wait for model download to finish (max 30min)
-for i in $(seq 1 60); do
-    if [ -f "$MODEL_PATH/config.json" ]; then
-        echo "Model ready."
-        break
-    fi
-    echo "Waiting for model download... (${i}/60)"
-    sleep 30
-done
 
 if [ ! -f "$MODEL_PATH/config.json" ]; then
     echo "ERROR: Model not found at $MODEL_PATH"
@@ -53,4 +41,4 @@ python -m vllm.entrypoints.openai.api_server \
   --served-model-name qwen3-8b \
   --trust-remote-code \
   --enable-prefix-caching \
-  2>&1 | tee /nfs/hpc/share/zhanyaol/claude-code/logs/vllm_server_${SLURM_JOB_ID}.log
+  2>&1 | tee /nfs/hpc/share/zhanyaol/claude-code/logs/vllm_server5_${SLURM_JOB_ID}.log
