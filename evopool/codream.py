@@ -249,8 +249,12 @@ def _verify_insights(
             verified.append(insight)
             continue
 
-        # Temporarily apply the insight to persona
+        # Temporarily apply the insight to persona.
+        # Also save/restore working_memory: execute_task clears it as a one-shot
+        # mechanism, but working memory set by a PREVIOUS task must survive through
+        # verification so it is available for the next REAL task execution.
         old_persona = agent.profile.persona
+        old_wm = list(getattr(agent.profile, 'working_memory', []))
         agent.profile.persona = (
             old_persona + f"\n[Strategy update from recent failure: {insight.insight}]"
         )
@@ -266,6 +270,9 @@ def _verify_insights(
         except Exception:
             # Any error → revert and discard
             agent.profile.persona = old_persona
+        finally:
+            # Always restore working memory — verification must not consume it
+            agent.profile.working_memory = old_wm
 
     return verified
 
