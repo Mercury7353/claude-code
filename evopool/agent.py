@@ -279,9 +279,19 @@ class Agent:
             self.consecutive_underperformance = 0
 
     def _update_persona(self, task: dict, outcome: dict, backbone_llm: str) -> None:
-        """Incrementally update the persona string (max 20% semantic drift)."""
+        """Incrementally update the persona string (max 20% semantic drift).
+
+        Extracts and preserves [General strategy] entries added by Co-Dream (Fix 2a)
+        before the LLM rewrites the persona — otherwise they would be silently lost
+        every 5 tasks since the LLM outputs only a new 1-2 sentence persona.
+        """
+        import re as _re
+        # Extract general strategies to re-append after update
+        strategy_entries = _re.findall(r"\n\[General strategy\]:.*", self.profile.persona)
+        # Build the base persona (without strategy annotations) for the LLM to revise
+        base_persona = _re.sub(r"\n\[General strategy\]:.*", "", self.profile.persona).strip()
         prompt = (
-            f"Current agent persona:\n{self.profile.persona}\n\n"
+            f"Current agent persona:\n{base_persona}\n\n"
             f"Recent task: type={task.get('type')}, score={outcome.get('score', 0.5):.2f}\n"
             f"Top skills: {self.profile.dominant_domains()}\n\n"
             "Revise the persona (1-2 sentences) to incrementally reflect any emerging "
@@ -290,7 +300,8 @@ class Agent:
         )
         try:
             new_persona = llm_call(model=backbone_llm, user=prompt, max_tokens=100)
-            self.profile.persona = new_persona.strip()
+            # Re-attach preserved general strategies so they survive the persona rewrite
+            self.profile.persona = new_persona.strip() + "".join(strategy_entries)
         except Exception:
             pass  # Keep current persona on failure
 
