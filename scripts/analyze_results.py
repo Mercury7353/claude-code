@@ -8,11 +8,14 @@ import sys
 RESULTS_BASE = "/nfs/hpc/share/zhanyaol/claude-code/results"
 
 EXPERIMENTS = {
-    "AFlow (E9)":         "e9/aflow_aflow_stream_seed42.json",
-    "SC (E10)":           "e10/self_consistency_aflow_stream_seed42.json",
-    "EvoPool full (E11)": "e11/evopool_full_aflow_stream_seed42.json",
-    "EvoPool fix1 (E12)": "e12/evopool_full_aflow_stream_seed42.json",
-    "DyLAN (E13)":        "e13/dylan_aflow_stream_seed42.json",
+    "AFlow (E9)":             "e9/aflow_aflow_stream_seed42.json",
+    "SC (E10)":               "e10/self_consistency_aflow_stream_seed42.json",
+    "EvoPool full (E11)":     "e11/evopool_full_aflow_stream_seed42.json",
+    "EvoPool fix1 (E12)":     "e12/evopool_full_aflow_stream_seed42.json",
+    "DyLAN (E13)":            "e13/dylan_aflow_stream_seed42.json",
+    "EvoPool noCoDream (E15)":"e15/evopool_no_codream_aflow_stream_seed42.json",
+    "EvoPool fix1 (E11b)":    "e11b/evopool_full_aflow_stream_seed42.json",
+    "EvoPool fix2 (E16)":     "e16/evopool_full_aflow_stream_seed42.json",
     "EvoPool noCoDream (E6)": "e6/evopool_no_codream_aflow_stream_seed42.json",
 }
 
