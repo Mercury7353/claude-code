@@ -157,7 +157,10 @@ class Agent:
             else:
                 subtask_prompt = (
                     subtask_prompt
-                    + "\n\nSolve step by step. Box your final answer: \\boxed{<answer>}"
+                    + "\n\nSolve step by step. Before finalizing, verify your answer "
+                    "by checking it against the original problem or using an alternative approach. "
+                    "Express your final answer in LaTeX inside \\boxed{}. "
+                    "For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
                 )
         elif is_qa_task and not is_review:
             subtask_prompt = (
@@ -202,8 +205,10 @@ class Agent:
         elif task_type in ("math_competition", "arithmetic") or domain == "math":
             user_prompt = (
                 user_prompt
-                + "\n\nSolve step by step. Express your final answer in LaTeX inside \\boxed{}."
-                + " For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
+                + "\n\nSolve step by step. Before finalizing, verify your answer "
+                "by checking it against the original problem or using an alternative approach. "
+                "Express your final answer in LaTeX inside \\boxed{}. "
+                "For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
             )
 
         # Fix 1 + Fix 3: inject scoped subdomain hints and working memory for math/QA tasks.
