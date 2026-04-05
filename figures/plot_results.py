@@ -296,6 +296,73 @@ def fig_insight_distribution():
     plt.close(fig)
 
 
+# ── Figure 5: Within-Domain Learning (CoDream vs noCoDream) ─────────────────
+def fig_within_domain_learning():
+    """
+    Shows Q1/Q4 (first 25 / last 25 tasks) within HQA and DROP for CoDream vs noCoDream.
+    Demonstrates: CoDream enables learning; noCoDream shows stagnation/decline.
+    Also shows the initial gap (Q1) as evidence of cross-domain L3 transfer.
+    """
+    codream_off = load("EvoPool -CoDream")   # E15b (no CoDream)
+    # Use E17 if available (clean code), fall back to E12 (old code but CoDream active)
+    codream_on  = load("EvoPool (ours)")
+    e12_label   = "EvoPool +CoDream (E17)"
+    if codream_on is None:
+        import os as _os
+        _p = _os.path.join(BASE, "e12/evopool_full_aflow_stream_seed42.json")
+        if _os.path.exists(_p):
+            import json as _json
+            with open(_p) as _f:
+                codream_on = _json.load(_f)
+            e12_label = "EvoPool +CoDream (E12)"
+    if codream_off is None or codream_on is None:
+        print("  [skip] Within-domain learning: E12 or E15b not found")
+        return
+
+    def quartile_means(data, domain, n_q=4):
+        scores = data["domain_scores"].get(domain, [])
+        q = len(scores) // n_q
+        return [np.mean(scores[i*q:(i+1)*q]) for i in range(n_q)] if q > 0 else []
+
+    domains_focus = ["hotpotqa", "drop"]
+    d_labels      = ["HotpotQA", "DROP"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5), sharey=False)
+
+    for ax, domain, dlabel in zip(axes, domains_focus, d_labels):
+        q_off = quartile_means(codream_off, domain)
+        q_on  = quartile_means(codream_on,  domain)
+        xs = [1, 2, 3, 4]
+        ax.plot(xs, q_on,  "o-", color="#10B981", lw=2.5, ms=7, label=e12_label)
+        ax.plot(xs, q_off, "s--", color="#8B5CF6", lw=2, ms=6, label="EvoPool -CoDream (E15b)")
+        ax.fill_between(xs, q_off, q_on, alpha=0.12, color="#10B981")
+        ax.set_xticks(xs)
+        ax.set_xticklabels(["Q1\n(first 25)", "Q2", "Q3", "Q4\n(last 25)"], fontsize=9)
+        ax.set_ylabel("Accuracy" if ax == axes[0] else "", fontsize=11)
+        ax.set_title(f"{dlabel}: Learning Dynamics", fontsize=11)
+        ax.set_ylim(0.3, 1.05)
+        ax.legend(fontsize=8.5, framealpha=0.9)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        # annotate Q1 gap (cross-domain transfer)
+        if q_on and q_off:
+            gap = q_on[0] - q_off[0]
+            ax.annotate(f"Q1 gap\n(L3 transfer)\n+{gap:.2f}", xy=(1, q_on[0]),
+                        xytext=(1.4, q_on[0]+0.05),
+                        fontsize=7.5, color="#059669",
+                        arrowprops=dict(arrowstyle="->", color="#059669", lw=1.2))
+
+    fig.suptitle("CoDream Enables Learning; Without CoDream, Performance Stagnates",
+                 fontsize=12, y=1.02)
+
+    out_path = os.path.join(OUT, "fig5_within_domain_learning.pdf")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    fig.savefig(out_path.replace(".pdf", ".png"), dpi=200, bbox_inches="tight")
+    print(f"Saved: {out_path}")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     print("Generating paper figures...")
@@ -303,4 +370,5 @@ if __name__ == "__main__":
     fig_domain_bar()
     fig_codream_ablation()
     fig_insight_distribution()
+    fig_within_domain_learning()
     print("Done.")
