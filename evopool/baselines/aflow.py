@@ -106,13 +106,26 @@ _DOMAIN_TO_CATEGORY = {
 }
 
 
-async def _workflow_math(ops: dict, prompt: str) -> str:
+async def _workflow_math(ops: dict, prompt: str, domain: str = "math") -> str:
     """AFlow math workflow: ScEnsemble(3) → AnswerGenerate."""
+    # Domain-specific format instructions so the evaluator can parse the answer
+    if domain == "gsm8k":
+        instruction = (
+            "Solve this math problem step by step. "
+            "At the end, write your final numeric answer on a new line as: #### <number>\n"
+        )
+    else:
+        # MATH competition: evaluator extracts \\boxed{...}
+        instruction = (
+            "Solve this competition math problem step by step. "
+            "Put your final answer inside \\boxed{}, for example: \\boxed{42}\n"
+        )
+
     # Generate 3 independent chain-of-thought solutions
     solutions = []
     for _ in range(3):
         try:
-            resp = await ops["custom"](input=prompt, instruction="Solve this math problem step by step:\n")
+            resp = await ops["custom"](input=prompt, instruction=instruction)
             solutions.append(resp.get("response", ""))
         except Exception:
             pass
@@ -189,7 +202,7 @@ async def _run_workflow_async(category: str, ops: dict, task: dict) -> str:
     entry_point = _infer_entry_point(task)
 
     if category == "math":
-        return await _workflow_math(ops, prompt)
+        return await _workflow_math(ops, prompt, domain=task.get("domain", "math"))
     elif category == "code":
         return await _workflow_code(ops, prompt, entry_point)
     else:
