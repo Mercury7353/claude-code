@@ -228,10 +228,18 @@ class Agent:
             if wm_hint:
                 user_prompt = wm_hint + "\n\n" + user_prompt
 
+        # Allocate enough tokens for competition math step-by-step reasoning.
+        # QA answers are short so 512 is fine; math needs more headroom.
+        is_math = domain in ("gsm8k", "math") or task_type in (
+            "math_word_problem", "math_competition", "arithmetic"
+        )
+        max_tokens = 1024 if is_math else 512
+
         response = llm_call(
             model=backbone_llm,
             system=system_prompt,
             user=user_prompt,
+            max_tokens=max_tokens,
         )
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 
