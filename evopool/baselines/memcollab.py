@@ -68,6 +68,12 @@ class MemCollabPool:
         domain = task.get("domain", "general")
         task_type = task.get("type", "general")
 
+        is_hard_math = (
+            task.get("type") in ("aime_problem", "math_competition_hard")
+            or domain.startswith("aime_")
+            or domain == "math_hard"
+        )
+
         # Step 1: Retrieve relevant memories from shared pool
         retrieved = self._retrieve(domain, task_prompt, k=self.retrieval_k)
 
@@ -80,6 +86,8 @@ class MemCollabPool:
                 model=self.backbone_llm,
                 system=f"You are a problem-solving agent with access to shared team memory.",
                 user=prompt,
+                max_tokens=4096 if is_hard_math else 512,
+                enable_thinking=is_hard_math,
             )
             responses[agent_id] = {
                 "agent_id": agent_id,

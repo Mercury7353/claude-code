@@ -280,8 +280,10 @@ def analyze_e25_vs_e17():
 
 HARD_MATH_EXPERIMENTS = {
     "Single-Agent (E39)":      "e39/single_agent_hard_math_stream_seed42.json",
-    "MemCollab (E43)":         "e43/memcollab_hard_math_stream_seed42.json",
-    "EvoMem (E44)":            "e44/evomem_hard_math_stream_seed42.json",
+    "MemCollab (E43, no-think)": "e43/memcollab_hard_math_stream_seed42.json",
+    "EvoMem (E44, no-think)":    "e44/evomem_hard_math_stream_seed42.json",
+    "MemCollab (E52)":           "e52/memcollab_hard_math_stream_seed42.json",
+    "EvoMem (E53)":              "e53/evomem_hard_math_stream_seed42.json",
     "noCoDream (E41)":         "e41/evopool_no_codream_hard_math_stream_seed42.json",
     "EvoPool-full (E40)":      "e40/evopool_full_hard_math_stream_seed42.json",
     # Ablations
@@ -369,8 +371,8 @@ def print_hard_math_difficulty_ladder():
     key_exps = [
         ("Single (E39)", "e39/single_agent_hard_math_stream_seed42.json"),
         ("AgentNet (E51)", "e51/agentnet_hard_math_stream_seed42.json"),
-        ("MemCollab (E43)", "e43/memcollab_hard_math_stream_seed42.json"),
-        ("EvoMem (E44)", "e44/evomem_hard_math_stream_seed42.json"),
+        ("MemCollab (E52)", "e52/memcollab_hard_math_stream_seed42.json"),
+        ("EvoMem (E53)", "e53/evomem_hard_math_stream_seed42.json"),
         ("noCoDream (E41)", "e41/evopool_no_codream_hard_math_stream_seed42.json"),
         ("EvoPool (E40)", "e40/evopool_full_hard_math_stream_seed42.json"),
     ]

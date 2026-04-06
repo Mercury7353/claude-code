@@ -75,7 +75,8 @@ class DyLANPool:
     def _infer_qtype(self, task: dict) -> str:
         domain = task.get("domain", "")
         task_type = task.get("type", "")
-        if domain in ("gsm8k", "math") or task_type in ("arithmetic", "math"):
+        if (domain in ("gsm8k", "math", "math_hard") or task_type in ("arithmetic", "math", "math_competition_hard", "aime_problem")
+                or domain.startswith("aime_")):
             return "math_exp"
         return "open-ended"
 
