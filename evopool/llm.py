@@ -137,15 +137,19 @@ def _call_local(model: str, user: str, system: str, max_tokens: int, temperature
     # When enabled, allow more tokens for the reasoning chain.
     effective_max_tokens = max_tokens
     if enable_thinking:
-        effective_max_tokens = max(max_tokens, 8192)
+        # Context window is 8192 total; AIME prompts ~150 tokens → 7900 available for output.
+        effective_max_tokens = max(max_tokens, 7500)
 
     payload = {
         "model": model,
         "messages": messages,
         "max_tokens": effective_max_tokens,
         "temperature": temperature,
-        "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
+    # vLLM 0.19: thinking is ON by default; passing enable_thinking=True causes 400.
+    # Only pass chat_template_kwargs when explicitly disabling thinking.
+    if not enable_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     resp = requests.post(f"{url}/v1/chat/completions", json=payload, timeout=300)
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
