@@ -291,7 +291,8 @@ HARD_MATH_EXPERIMENTS = {
     "noL2 (E49)":              "e49/evopool_no_l2_hard_math_stream_seed42.json",
     "noVerify (E50)":          "e50/evopool_no_verify_hard_math_stream_seed42.json",
     # DyLAN baseline
-    "DyLAN (E42)":             "e42/dylan_hard_math_stream_seed42.json",
+    "DyLAN (E42, old-qtype)":  "e42/dylan_hard_math_stream_seed42.json",
+    "DyLAN (E54, fixed)":      "e54/dylan_hard_math_stream_seed42.json",
     # AgentNet with thinking
     "AgentNet (E51)":          "e51/agentnet_hard_math_stream_seed42.json",
     # No-thinking-mode versions (for reference)
