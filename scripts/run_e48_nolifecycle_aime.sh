@@ -40,7 +40,7 @@ python -u run_experiment.py \
     --team_size 3 \
     --backbone_llm "qwen3-8b" \
     --seed 42 \
-    --domains "math_hard,aime_2022,aime_2023,aime_2024,aime_2025" \\
+    --domains "math_hard,aime_2022,aime_2023,aime_2024,aime_2025" \
     --output_dir results/e48/
 
 echo "=== Done: EvoPool-noLifecycle on Hard Math Stream (thinking=True) | $(date) ==="

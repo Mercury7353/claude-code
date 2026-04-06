@@ -27,6 +27,10 @@ EXPERIMENTS = {
     "EvoPool-noVerify (E27)":    "e27/evopool_no_verify_aflow_stream_seed42.json",
     # --- Warm-start (E20) ---
     "EvoPool-warmStart (E20)":   "e20/evopool_full_aflow_stream_seed42.json",
+    # --- New baselines E33/E35/E37 ---
+    "MemCollab (E33)":           "e33/memcollab_aflow_stream_seed42.json",
+    "AgentNet (E35)":            "e35/agentnet_aflow_stream_seed42.json",
+    "EvoMem (E37)":              "e37/evomem_aflow_stream_seed42.json",
     # --- Reference / older ---
     "AFlow (E9, buggy fmt)":     "e9/aflow_aflow_stream_seed42.json",
 }
@@ -274,8 +278,121 @@ def analyze_e25_vs_e17():
     print("="*80)
 
 
+HARD_MATH_EXPERIMENTS = {
+    "Single-Agent (E39)":      "e39/single_agent_hard_math_stream_seed42.json",
+    "MemCollab (E43)":         "e43/memcollab_hard_math_stream_seed42.json",
+    "EvoMem (E44)":            "e44/evomem_hard_math_stream_seed42.json",
+    "noCoDream (E41)":         "e41/evopool_no_codream_hard_math_stream_seed42.json",
+    "EvoPool-full (E40)":      "e40/evopool_full_hard_math_stream_seed42.json",
+    # Ablations
+    "noLifecycle (E48)":       "e48/evopool_no_lifecycle_hard_math_stream_seed42.json",
+    "noL2 (E49)":              "e49/evopool_no_l2_hard_math_stream_seed42.json",
+    "noVerify (E50)":          "e50/evopool_no_verify_hard_math_stream_seed42.json",
+    # DyLAN baseline
+    "DyLAN (E42)":             "e42/dylan_hard_math_stream_seed42.json",
+    # No-thinking-mode versions (for comparison)
+    "AgentNet-noThink (E36)":  "e36/agentnet_hard_math_stream_seed42.json",
+    "EvoMem-noThink (E38)":    "e38/evomem_hard_math_stream_seed42.json",
+}
+
+HARD_MATH_DOMAINS = ["math_hard", "aime_2022", "aime_2023", "aime_2024", "aime_2025"]
+HARD_MATH_SHORT = {
+    "math_hard": "MATH-H",
+    "aime_2022": "A22",
+    "aime_2023": "A23",
+    "aime_2024": "A24",
+    "aime_2025": "A25",
+}
+
+
+def load_hard_math(path):
+    """Load hard math result; handles both old format (all_scores) and new (per_task_results)."""
+    full = os.path.join(RESULTS_BASE, path)
+    if not os.path.exists(full):
+        return None
+    with open(full) as f:
+        data = json.load(f)
+    # Build domain_scores from per_task_results if not present
+    tasks = data.get("per_task_results", [])
+    if tasks:
+        ds = {}
+        for t in tasks:
+            dom = t.get("domain", "unknown")
+            score = t.get("score", t.get("team_score", 0.0))
+            ds.setdefault(dom, []).append(score)
+        data["_domain_scores"] = ds
+    else:
+        data["_domain_scores"] = {}
+    return data
+
+
+def print_hard_math_table():
+    print("\n" + "="*80)
+    print("Hard Math Stream Results (with thinking=True)")
+    print("="*80)
+    domains = HARD_MATH_DOMAINS
+    header = f"{'Condition':<24}" + "".join(f" {HARD_MATH_SHORT[d]:>7}" for d in domains) + f" {'MEAN':>7}"
+    print(header)
+    print("-"*80)
+
+    for name, path in HARD_MATH_EXPERIMENTS.items():
+        data = load_hard_math(path)
+        if data is None:
+            print(f"{name:<24}" + f" {'—':>7}" * len(domains) + f" {'N/A':>7}")
+            continue
+        ds = data.get("_domain_scores", {})
+        summary = data.get("summary", {})
+        cells = []
+        domain_means = []
+        for d in domains:
+            scores = ds.get(d, [])
+            if scores:
+                m = sum(scores) / len(scores)
+                cells.append(f"{m:7.3f}")
+                domain_means.append(m)
+            else:
+                cells.append(f"{'—':>7}")
+        overall = summary.get("mean_score", sum(domain_means)/len(domain_means) if domain_means else 0.0)
+        print(f"{name:<24}" + "".join(cells) + f" {overall:7.3f}")
+
+    print("="*80)
+
+
+def print_hard_math_difficulty_ladder():
+    """Show domain-by-domain progression — tests within-domain difficulty ladder claim."""
+    print("\n" + "="*80)
+    print("AIME Difficulty Ladder: mean by domain (EvoPool vs baselines)")
+    print("="*80)
+
+    key_exps = [
+        ("Single (E39)", "e39/single_agent_hard_math_stream_seed42.json"),
+        ("MemCollab (E43)", "e43/memcollab_hard_math_stream_seed42.json"),
+        ("EvoMem (E44)", "e44/evomem_hard_math_stream_seed42.json"),
+        ("noCoDream (E41)", "e41/evopool_no_codream_hard_math_stream_seed42.json"),
+        ("EvoPool (E40)", "e40/evopool_full_hard_math_stream_seed42.json"),
+    ]
+
+    domains = HARD_MATH_DOMAINS
+    for name, path in key_exps:
+        data = load_hard_math(path)
+        if data is None:
+            print(f"  {name}: NOT FOUND")
+            continue
+        ds = data.get("_domain_scores", {})
+        row = f"  {name:<22}"
+        for d in domains:
+            scores = ds.get(d, [])
+            m = sum(scores)/len(scores) if scores else float("nan")
+            row += f"  {HARD_MATH_SHORT[d]}={m:.3f}" if m == m else f"  {HARD_MATH_SHORT[d]}=N/A"
+        print(row)
+
+    print("="*80)
+
+
 if __name__ == "__main__":
     print_table()
     quartile_trends()
     codream_gains()
     analyze_e25_vs_e17()
+    print_hard_math_table()
+    print_hard_math_difficulty_ladder()
