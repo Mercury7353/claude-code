@@ -49,11 +49,17 @@ def llm_call(
     temperature: float = 0.7,
     retry: int = 3,
     retry_delay: float = 2.0,
+    enable_thinking: bool = False,
 ) -> str:
     """
     Call an LLM and return the response text.
     Supports claude-* models via Anthropic API and gpt-* / o* models via OpenAI API.
     Falls back to a local vLLM endpoint if EVOPOOL_LOCAL_LLM_URL is set.
+
+    Args:
+        enable_thinking: Enable Qwen3 extended thinking (chain-of-thought tokens).
+            Use for hard math/reasoning tasks (e.g. AIME). Increases latency 3-5x
+            but necessary for problems requiring long reasoning chains.
     """
     # Auto-detect vLLM server if no explicit URL set and model looks like a local one
     if not os.environ.get("EVOPOOL_LOCAL_LLM_URL") and not os.environ.get("EVOPOOL_LOCAL_LLM_URLS") and not model.startswith(("claude", "gpt-", "o1", "o3", "o4")):
@@ -65,13 +71,13 @@ def llm_call(
         try:
             local_url = _get_local_url()
             if local_url and not model.startswith(("claude", "gpt-", "o1", "o3", "o4")):
-                return _call_local(model, user, system, max_tokens, temperature, local_url)
+                return _call_local(model, user, system, max_tokens, temperature, local_url, enable_thinking=enable_thinking)
             elif model.startswith("claude"):
                 return _call_anthropic(model, user, system, max_tokens, temperature)
             elif model.startswith(("gpt-", "o1", "o3", "o4")):
                 return _call_openai(model, user, system, max_tokens, temperature)
             elif local_url:
-                return _call_local(model, user, system, max_tokens, temperature, local_url)
+                return _call_local(model, user, system, max_tokens, temperature, local_url, enable_thinking=enable_thinking)
             else:
                 return _call_anthropic(model, user, system, max_tokens, temperature)
         except Exception as e:
@@ -115,8 +121,8 @@ def _call_openai(model: str, user: str, system: str, max_tokens: int, temperatur
     return response.choices[0].message.content
 
 
-def _call_local(model: str, user: str, system: str, max_tokens: int, temperature: float, url: str = "") -> str:
-    """Call a local vLLM/Ollama endpoint. Thinking mode disabled for speed."""
+def _call_local(model: str, user: str, system: str, max_tokens: int, temperature: float, url: str = "", enable_thinking: bool = False) -> str:
+    """Call a local vLLM/Ollama endpoint."""
     import re
     import requests
 
@@ -127,20 +133,24 @@ def _call_local(model: str, user: str, system: str, max_tokens: int, temperature
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": user})
 
+    # thinking mode: enable for hard math (AIME); disable for speed on routine tasks.
+    # When enabled, allow more tokens for the reasoning chain.
+    effective_max_tokens = max_tokens
+    if enable_thinking:
+        effective_max_tokens = max(max_tokens, 8192)
+
     payload = {
         "model": model,
         "messages": messages,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
         "temperature": temperature,
-        # Disable Qwen3 thinking mode: saves 500-1500 tokens/call (10-15s each).
-        # Non-thinking mode still gives high quality on diverse tasks.
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
     }
-    resp = requests.post(f"{url}/v1/chat/completions", json=payload, timeout=120)
+    resp = requests.post(f"{url}/v1/chat/completions", json=payload, timeout=300)
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
-    # Strip any residual thinking tokens just in case
+    # Strip thinking tokens from final output
     content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
     if "<think>" in content:
-        content = content[content.index("<think>") + len("<think>"):].strip()
+        content = content[content.index("</think>") + len("</think>"):].strip() if "</think>" in content else content
     return content

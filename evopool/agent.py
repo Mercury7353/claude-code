@@ -203,14 +203,17 @@ class Agent:
             if wm_hint:
                 subtask_prompt = wm_hint + "\n\n" + subtask_prompt
 
+        is_hard_math = task.get("type") in ("aime_problem", "math_competition_hard") or task.get("domain", "").startswith("aime_") or task.get("domain") == "math_hard"
         user_prompt = subtask_prompt
         if context:
             user_prompt = f"Context from teammates:\n{context}\n\n---\nYour task:\n{subtask_prompt}"
+        effective_max_tokens = max(max_tokens, 4096) if is_hard_math else max_tokens
         response = llm_call(
             model=backbone_llm,
             system=system_prompt,
             user=user_prompt,
-            max_tokens=max_tokens,
+            max_tokens=effective_max_tokens,
+            enable_thinking=is_hard_math,
         )
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 
@@ -245,18 +248,25 @@ class Agent:
             if wm_hint:
                 user_prompt = wm_hint + "\n\n" + user_prompt
 
-        # Allocate enough tokens for competition math step-by-step reasoning.
-        # QA answers are short so 512 is fine; math needs more headroom.
-        is_math = domain in ("gsm8k", "math") or task_type in (
+        # Hard math (AIME) needs extended thinking + generous token budget.
+        # Regular math needs moderate budget; QA/code can be short.
+        is_hard_math = task_type in ("aime_problem", "math_competition_hard") or domain.startswith("aime_") or domain == "math_hard"
+        is_math = is_hard_math or domain in ("gsm8k", "math") or task_type in (
             "math_word_problem", "math_competition", "arithmetic"
         )
-        max_tokens = 1024 if is_math else 512
+        if is_hard_math:
+            max_tokens = 4096
+        elif is_math:
+            max_tokens = 1024
+        else:
+            max_tokens = 512
 
         response = llm_call(
             model=backbone_llm,
             system=system_prompt,
             user=user_prompt,
             max_tokens=max_tokens,
+            enable_thinking=is_hard_math,
         )
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 

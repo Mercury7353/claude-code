@@ -63,11 +63,14 @@ class SingleAgentPool:
         t0 = time.time()
         system, user = self._build_prompt(task)
 
+        # Hard math tasks (AIME / competition math) need extended thinking for long reasoning chains.
+        is_hard_math = task.get("type") in ("aime_problem", "math_competition_hard") or task.get("domain", "").startswith("aime_") or task.get("domain") == "math_hard"
         response = llm_call(
             model=self.backbone_llm,
             system=system,
             user=user,
-            max_tokens=1024 if task.get("domain") in ("gsm8k", "math") else 512,
+            max_tokens=4096 if is_hard_math else (1024 if task.get("domain") in ("gsm8k", "math") else 512),
+            enable_thinking=is_hard_math,
         )
 
         agent_id = "single_agent"

@@ -20,7 +20,7 @@ from typing import Union
 from datasets import load_dataset
 
 
-HARD_MATH_DOMAINS = ["math_hard", "aime_2022", "aime_2023", "aime_2024", "aime_2025"]
+HARD_MATH_DOMAINS = ["math_hard", "aime_2022", "aime_2023", "aime_2024", "aime_2025", "aime_2026"]
 
 
 def load_hard_math_stream(
@@ -100,10 +100,19 @@ def _load_domain(domain: str, n: int | None, rng: random.Random, shuffle: bool) 
                     x for x in ds
                     if re.search(str(year), x.get("url", ""))
                 ]
-            else:
-                # AIME 2025
+            elif year == 2025:
+                # AIME 2025: TIGER-Lab/AIME25
                 ds = load_dataset("TIGER-Lab/AIME25", split="train")
                 samples = list(ds)
+            else:
+                # AIME 2026: try di-zhang-fdu/AIME_2026 or fallback
+                try:
+                    ds = load_dataset("di-zhang-fdu/AIME_2026", split="train")
+                    samples = list(ds)
+                except Exception:
+                    # Try alternate dataset name
+                    ds = load_dataset("Maxwell-Jia/AIME_2026", split="train")
+                    samples = list(ds)
 
             if shuffle:
                 rng.shuffle(samples)
