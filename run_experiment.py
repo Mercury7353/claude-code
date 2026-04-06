@@ -19,6 +19,7 @@ Available conditions:
   agentnet                AgentNet baseline (per-agent RAG memory)
   no_memory               No memory baseline (random selection, no profile update)
   self_consistency        Self-Consistency (Wang et al. 2022): k=5 majority vote, no memory
+  memcollab               MemCollab (arXiv 2603.23234): contrastive trajectory distillation → shared memory
 
 Available benchmarks:
   aflow_stream     6-domain sequential stream (GSM8K/HotpotQA/MBPP/MATH/HumanEval/DROP)
@@ -236,6 +237,15 @@ def _build_system(args):
     if condition == "aflow":
         from evopool.baselines.aflow import AFlowPool
         return AFlowPool(
+            pool_size=args.pool_size,
+            team_size=args.team_size,
+            backbone_llm=args.backbone_llm,
+            seed=args.seed,
+        )
+
+    if condition == "memcollab":
+        from evopool.baselines.memcollab import MemCollabPool
+        return MemCollabPool(
             pool_size=args.pool_size,
             team_size=args.team_size,
             backbone_llm=args.backbone_llm,
