@@ -255,7 +255,7 @@ class Agent:
             "math_word_problem", "math_competition", "arithmetic"
         )
         if is_hard_math:
-            max_tokens = 4096
+            max_tokens = 3000  # EvoPool prompt ~1500-2000 tokens; 3000 output leaves headroom
         elif is_math:
             max_tokens = 1024
         else:

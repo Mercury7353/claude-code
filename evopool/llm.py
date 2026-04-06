@@ -137,8 +137,11 @@ def _call_local(model: str, user: str, system: str, max_tokens: int, temperature
     # When enabled, allow more tokens for the reasoning chain.
     effective_max_tokens = max_tokens
     if enable_thinking:
-        # Context window is 8192 total; AIME prompts ~150 tokens → 7900 available for output.
-        effective_max_tokens = max(max_tokens, 7500)
+        # Context window is 8192 total.
+        # Single-agent AIME prompt ~150 tokens → can use up to 7500.
+        # EvoPool prompts include profile+insights+context, easily 800-1500 tokens.
+        # Use 4096 as safe default; callers can override via max_tokens.
+        effective_max_tokens = max(max_tokens, 4096)
 
     payload = {
         "model": model,
