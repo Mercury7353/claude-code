@@ -34,9 +34,11 @@ class AgentProfile:
             "collab_log": self.collab_log,
             "perf_stats": {k: v[-20:] for k, v in self.perf_stats.items()},
         }
-        # Persist L2 subdomain insights and L1 working memory if present
+        # Persist all memory tiers
         if hasattr(self, "subdomain_insights") and self.subdomain_insights:
             d["subdomain_insights"] = self.subdomain_insights
+        if hasattr(self, "domain_insights") and self.domain_insights:
+            d["domain_insights"] = self.domain_insights  # L2.5
         if hasattr(self, "working_memory") and self.working_memory:
             d["working_memory"] = self.working_memory
         return d
@@ -50,9 +52,10 @@ class AgentProfile:
             collab_log=d["collab_log"],
             perf_stats=d["perf_stats"],
         )
-        # Restore L2/L1 memories
         if "subdomain_insights" in d:
             obj.subdomain_insights = d["subdomain_insights"]
+        if "domain_insights" in d:
+            obj.domain_insights = d["domain_insights"]  # L2.5
         if "working_memory" in d:
             obj.working_memory = d["working_memory"]
         return obj
@@ -179,6 +182,13 @@ class Agent:
                 subtask_prompt
                 + "\n\nProvide a concise, direct answer. Do not repeat the question."
             )
+        # Inject domain_general insights (L2.5): useful for ALL tasks in this broad domain.
+        # Higher-priority than subdomain hints; injected for code tasks too (safe meta-strategies).
+        if not is_review:
+            domain_hint = _get_domain_hint(self.profile, task)
+            if domain_hint:
+                subtask_prompt = domain_hint + "\n\n" + subtask_prompt
+
         # Fix 1: inject scoped subdomain insights when sub-domain matches current task.
         # Skip for code tasks (format-sensitive) and reviews.
         if not is_code_task and not is_review:
@@ -223,8 +233,10 @@ class Agent:
                 "For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
             )
 
-        # Fix 1 + Fix 3: inject scoped subdomain hints and working memory for math/QA tasks.
-        # These were previously only in execute_subtask, missing the math/QA self-consistency path.
+        # Inject domain_general, subdomain, and working memory hints for math/QA paths.
+        domain_hint = _get_domain_hint(self.profile, task)
+        if domain_hint:
+            user_prompt = domain_hint + "\n\n" + user_prompt
         if not is_code:
             subdomain_hint = _get_subdomain_hint(self.profile, task)
             if subdomain_hint:
@@ -405,6 +417,32 @@ class Agent:
 # ------------------------------------------------------------------
 # Fix 2 / Fix 3: Subdomain + working memory injection helpers
 # ------------------------------------------------------------------
+
+def _get_domain_hint(profile: "AgentProfile", task: dict) -> str:
+    """
+    Inject domain_general insights (L2.5): strategies useful for ALL tasks in the
+    same broad domain (e.g. all MATH, all code). These are higher priority than
+    subdomain hints and apply regardless of subtopic.
+    """
+    domain_insights: dict = getattr(profile, 'domain_insights', {})
+    if not domain_insights:
+        return ""
+
+    from .codream import _domains_related, _DOMAIN_CLUSTERS
+    task_domain = task.get("domain", task.get("type", ""))
+
+    matched: list[str] = []
+    for scope, insights in domain_insights.items():
+        if _domains_related(scope, task_domain):
+            matched.extend(insights)
+
+    if not matched:
+        return ""
+
+    hint = "[Broad domain strategy from past experience — apply when relevant]:\n"
+    hint += "\n".join(f"- {ins}" for ins in matched[:2])
+    return hint
+
 
 def _get_subdomain_hint(profile: "AgentProfile", task: dict) -> str:
     """

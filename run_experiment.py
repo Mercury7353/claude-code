@@ -33,6 +33,7 @@ import time
 import traceback
 
 from evopool.benchmarks.aflow_stream import load_aflow_stream, AFlowEvaluator
+from evopool.benchmarks.hard_math_stream import load_hard_math_stream, HardMathEvaluator
 from evopool.eval.metrics import summarize_results, print_comparison_table
 
 
@@ -78,15 +79,23 @@ def main():
         n_per_domain = args.n_per_domain
 
     print(f"Loading tasks (benchmark={args.benchmark}, n_per_domain={n_per_domain})...")
-    tasks = load_aflow_stream(
-        n_per_domain=n_per_domain,
-        domains=domains,
-        shuffle=True,
-        seed=args.seed,
-    )
+    if args.benchmark == "hard_math_stream":
+        tasks = load_hard_math_stream(
+            domains=domains,
+            n_per_domain=n_per_domain,
+            seed=args.seed,
+            shuffle=True,
+        )
+        evaluator = HardMathEvaluator()
+    else:
+        tasks = load_aflow_stream(
+            n_per_domain=n_per_domain,
+            domains=domains,
+            shuffle=True,
+            seed=args.seed,
+        )
+        evaluator = AFlowEvaluator()
     print(f"Loaded {len(tasks)} tasks")
-
-    evaluator = AFlowEvaluator()
 
     # Initialize system
     system = _build_system(args)
