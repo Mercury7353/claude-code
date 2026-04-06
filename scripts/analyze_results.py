@@ -290,7 +290,9 @@ HARD_MATH_EXPERIMENTS = {
     "noVerify (E50)":          "e50/evopool_no_verify_hard_math_stream_seed42.json",
     # DyLAN baseline
     "DyLAN (E42)":             "e42/dylan_hard_math_stream_seed42.json",
-    # No-thinking-mode versions (for comparison)
+    # AgentNet with thinking
+    "AgentNet (E51)":          "e51/agentnet_hard_math_stream_seed42.json",
+    # No-thinking-mode versions (for reference)
     "AgentNet-noThink (E36)":  "e36/agentnet_hard_math_stream_seed42.json",
     "EvoMem-noThink (E38)":    "e38/evomem_hard_math_stream_seed42.json",
 }
@@ -366,6 +368,7 @@ def print_hard_math_difficulty_ladder():
 
     key_exps = [
         ("Single (E39)", "e39/single_agent_hard_math_stream_seed42.json"),
+        ("AgentNet (E51)", "e51/agentnet_hard_math_stream_seed42.json"),
         ("MemCollab (E43)", "e43/memcollab_hard_math_stream_seed42.json"),
         ("EvoMem (E44)", "e44/evomem_hard_math_stream_seed42.json"),
         ("noCoDream (E41)", "e41/evopool_no_codream_hard_math_stream_seed42.json"),
