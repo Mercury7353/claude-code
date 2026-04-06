@@ -22,6 +22,11 @@ EXPERIMENTS = {
     "EvoPool-randTeam (E24)":    "e24/evopool_random_team_aflow_stream_seed42.json",
     # --- Enhanced CoDream (E25) ---
     "EvoPool-enh_codream (E25)": "e25/evopool_enhanced_codream_aflow_stream_seed42.json",
+    # --- Ablations E26/E27 ---
+    "EvoPool-symCD (E26)":       "e26/evopool_symmetric_codream_aflow_stream_seed42.json",
+    "EvoPool-noVerify (E27)":    "e27/evopool_no_verify_aflow_stream_seed42.json",
+    # --- Warm-start (E20) ---
+    "EvoPool-warmStart (E20)":   "e20/evopool_full_aflow_stream_seed42.json",
     # --- Reference / older ---
     "AFlow (E9, buggy fmt)":     "e9/aflow_aflow_stream_seed42.json",
 }
