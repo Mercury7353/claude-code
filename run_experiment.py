@@ -20,6 +20,7 @@ Available conditions:
   no_memory               No memory baseline (random selection, no profile update)
   self_consistency        Self-Consistency (Wang et al. 2022): k=5 majority vote, no memory
   memcollab               MemCollab (arXiv 2603.23234): contrastive trajectory distillation → shared memory
+  evomem                  EvoMem: individual evolving memory (Reflexion-style self-reflection, no cross-agent sharing)
 
 Available benchmarks:
   aflow_stream     6-domain sequential stream (GSM8K/HotpotQA/MBPP/MATH/HumanEval/DROP)
@@ -246,6 +247,15 @@ def _build_system(args):
     if condition == "memcollab":
         from evopool.baselines.memcollab import MemCollabPool
         return MemCollabPool(
+            pool_size=args.pool_size,
+            team_size=args.team_size,
+            backbone_llm=args.backbone_llm,
+            seed=args.seed,
+        )
+
+    if condition == "evomem":
+        from evopool.baselines.evomem import EvoMemPool
+        return EvoMemPool(
             pool_size=args.pool_size,
             team_size=args.team_size,
             backbone_llm=args.backbone_llm,
