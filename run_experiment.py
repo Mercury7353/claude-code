@@ -129,6 +129,7 @@ def main():
                 "codream_generated": result.get("codream_generated", 0),
                 "codream_verified": result.get("codream_verified", 0),
                 "codream_verify_rate": result.get("codream_verify_rate", 0.0),
+                "codream_insight_texts": result.get("codream_insight_texts", []),
             }
             # Store final_answer for code tasks to aid debugging
             if domain in ("humaneval", "mbpp") and "final_answer" in result:

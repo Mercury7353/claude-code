@@ -295,6 +295,18 @@ class EvoPool:
         self.task_index += 1
 
         cd = codream_session
+        # Save insight texts for case study analysis (truncated to 300 chars)
+        insight_texts = []
+        if cd and cd.insights:
+            insight_texts = [
+                {
+                    "agent": ins.agent_id,
+                    "insight": ins.insight[:300] if ins.insight else "",
+                    "transferability": ins.transferability,
+                    "domain_scope": ins.domain_scope,
+                }
+                for ins in cd.insights
+            ]
         result_dict: dict = {
             "task_id": task.get("id", self.task_index),
             "team_score": team_score,
@@ -306,6 +318,7 @@ class EvoPool:
             "codream_generated": cd.n_insights_generated if cd else 0,
             "codream_verified": cd.n_insights_verified if cd else 0,
             "codream_verify_rate": cd.verify_rate if cd else 0.0,
+            "codream_insight_texts": insight_texts,
             "lifecycle_events": [e.__dict__ for e in lifecycle_events_this_task],
             "metrics": metrics,
         }
