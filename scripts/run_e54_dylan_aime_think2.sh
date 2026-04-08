@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J evopool_e54_dylan_aime_think2
 #SBATCH -A hw-grp
-#SBATCH -p hw-grp
+#SBATCH -p hw-grp,share,preempt
 #SBATCH --gres=gpu:0
 #SBATCH -t 8:00:00
 #SBATCH --mem=32G
@@ -31,6 +31,8 @@ done
 [ -z "$URL6" ] || [ -z "$URL7" ] && echo "ERROR: No responsive vLLM servers" && exit 1
 export EVOPOOL_LOCAL_LLM_URLS="$URL6,$URL7"
 export HF_DATASETS_OFFLINE=1
+export EVOPOOL_DYLAN_THINKING=1
+export EVOPOOL_DYLAN_MAX_TOKENS=6000
 mkdir -p results/e54
 
 python -u run_experiment.py \

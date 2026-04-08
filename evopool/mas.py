@@ -58,6 +58,7 @@ class MASResult:
     decomposition_plan: list[dict]
     extra_agents_recruited: list[str]
     n_rounds: int
+    structure_chosen: str = "voting"         # which MAS structure the leader selected
 
 
 # ------------------------------------------------------------------
@@ -87,30 +88,111 @@ class TeamLeader:
         self.max_extra_agents = max_extra_agents
         self.critique_enabled = critique_enabled
 
-    _MATH_TYPES = {"math_competition", "math_word_problem", "arithmetic"}
-    _QA_TYPES = {"multi_hop_qa", "reading_comprehension", "factual_qa"}
-    _CODE_TYPES = {"code_generation", "code_completion"}
+    # Structure descriptions for the leader's selection prompt
+    _STRUCTURE_DESCRIPTIONS = {
+        "voting": "All agents solve independently, majority vote picks the answer. Best when agents have comparable skills and the problem has one correct answer.",
+        "debate": "Agents solve independently (round 1), then see each other's solutions and critique/revise (round 2), final vote. Best when diverse perspectives help.",
+        "generator_critic": "Strongest agent solves, others review and suggest improvements, generator revises. Best when one agent is clearly stronger.",
+        "decompose": "Leader breaks task into subtasks, assigns by agent strength, synthesizes results. Best for complex multi-step tasks.",
+    }
 
     def run(self, task: dict) -> MASResult:
-        """Full leader-coordinated task execution pipeline."""
-        extra_recruited: list[str] = []
-
-        # Math tasks: use self-consistency (all agents solve independently,
-        # pick majority answer) rather than primary+reviewer decomposition.
+        """Leader selects MAS structure dynamically, then executes."""
         task_type = task.get("type", "general")
         domain = task.get("domain", "")
-        if task_type in self._MATH_TYPES:
-            return self._run_self_consistency(task)
 
-        # QA tasks: also use self-consistency (pick most common short answer).
-        # This mirrors AFlow's ScEnsemble approach for QA.
-        if task_type in self._QA_TYPES:
-            return self._run_qa_self_consistency(task)
-
-        # Code tasks: use best-of-k selection with independent generation.
-        # All k agents generate independently; best passes tests; LLM fix pass if needed.
-        if task_type in self._CODE_TYPES or domain in ("mbpp", "humaneval"):
+        # Code tasks always use best-of-k (needs test execution, not LLM judgement)
+        if task_type in ("code_generation", "code_completion") or domain in ("mbpp", "humaneval"):
             return self._run_code_best_of_k(task)
+
+        # Leader selects structure + per-agent prompts
+        selection = self._select_structure(task)
+        structure = selection.get("structure", "voting")
+        agent_hints = selection.get("agent_roles", {})
+
+        if structure == "debate":
+            result = self._run_debate(task, agent_hints)
+        elif structure == "generator_critic":
+            result = self._run_generator_critic(task, agent_hints)
+        elif structure == "decompose":
+            result = self._run_decompose(task, agent_hints)
+        else:  # voting (default)
+            result = self._run_voting(task, agent_hints)
+        result.structure_chosen = structure
+        return result
+
+    def _select_structure(self, task: dict) -> dict:
+        """Leader decides which MAS structure fits this task + team.
+
+        Uses leader's past leadership experiences to inform the decision.
+        """
+        task_type = task.get("type", "general")
+        prompt_snippet = task.get("prompt", task.get("question", ""))[:200]
+
+        # Build team profile summary for the leader
+        team_profiles = []
+        for agent in self.team:
+            top = agent.profile.dominant_domains(3)
+            aff = agent.profile.affinity_for(task_type)
+            recent_exps = agent.profile.get_relevant_experiences(task, max_k=2)
+            exp_text = "; ".join(f"{'✓' if e.score>=0.5 else '✗'} {e.strategy_summary[:40]}" for e in recent_exps)
+            team_profiles.append(
+                f"  {agent.agent_id[:6]}: affinity={aff:.2f}, skills={top}"
+                + (f", experience=[{exp_text}]" if exp_text else "")
+            )
+
+        structures_text = "\n".join(
+            f"- {name}: {desc}" for name, desc in self._STRUCTURE_DESCRIPTIONS.items()
+        )
+
+        # Inject leader's past leadership experiences (which structures worked/failed)
+        from .agent import Experience
+        lead_exps = [
+            e for e in self.leader.profile.experience_buffer
+            if e.source == "leadership" and (e.task_type == task_type or e.domain == task.get("domain", ""))
+        ]
+        lead_exps.sort(key=lambda e: -e.relevance_weight)
+        lead_hint = ""
+        if lead_exps:
+            lines = []
+            for e in lead_exps[:3]:
+                mark = "✓" if e.score >= 0.5 else "✗"
+                lines.append(f"  {mark} {e.strategy_summary}")
+            lead_hint = "\nYour past leadership decisions on similar tasks:\n" + "\n".join(lines) + "\n"
+
+        prompt = (
+            f"You are the team leader (Agent {self.leader.agent_id[:6]}).\n\n"
+            f"Task type: {task_type}\n"
+            f"Task: {prompt_snippet}...\n\n"
+            f"Your team:\n" + "\n".join(team_profiles) + "\n\n"
+            f"Available collaboration structures:\n{structures_text}\n"
+            f"{lead_hint}\n"
+            "Choose the best structure for this task and team. "
+            "Also provide a brief per-agent hint (1 sentence each) to guide their approach.\n\n"
+            "Respond with JSON:\n"
+            '{"structure": "voting|debate|generator_critic|decompose",\n'
+            ' "reasoning": "why this structure (1 sentence)",\n'
+            ' "agent_roles": {"agent_id_prefix": "hint for this agent"}}'
+        )
+        try:
+            raw = llm_call(model=self.backbone_llm, user=prompt, max_tokens=300)
+            data = json.loads(raw.strip()) if "{" in raw else {}
+            structure = data.get("structure", "voting")
+            if structure not in self._STRUCTURE_DESCRIPTIONS:
+                structure = "voting"
+            return {"structure": structure, "agent_roles": data.get("agent_roles", {}),
+                    "reasoning": data.get("reasoning", "")}
+        except Exception:
+            return {"structure": "voting", "agent_roles": {}, "reasoning": ""}
+
+    def _get_agent_hint(self, agent, agent_hints: dict) -> str:
+        """Look up the leader's hint for an agent (by prefix match)."""
+        for prefix, hint in agent_hints.items():
+            if agent.agent_id.startswith(prefix):
+                return hint
+        return ""
+
+        # ---- Below: kept for decompose path ----
 
         # Step 1: Analyze task
         analysis = self._analyze_task(task)
@@ -226,20 +308,20 @@ class TeamLeader:
             n_rounds=1,
         )
 
-    def _run_self_consistency(self, task: dict) -> MASResult:
+    def _run_voting(self, task: dict, agent_hints: dict = None) -> MASResult:
         """
-        Self-consistency mode for math tasks.
-        All k agents solve independently → pick the majority final answer.
-        This mirrors AFlow's ScEnsemble approach, which is well-suited for
-        math where multiple solution paths converge on the correct answer.
+        Voting mode: all agents solve independently → majority vote.
+        Each agent gets their private experience + leader's per-agent hint.
         """
         import re as _re
+        agent_hints = agent_hints or {}
 
         results: list[SubtaskResult] = []
         per_agent_responses: dict[str, dict] = {}
 
         for agent in self.team:
-            resp = agent.execute_task(task, self.backbone_llm)
+            hint = self._get_agent_hint(agent, agent_hints)
+            resp = agent.execute_task(task, self.backbone_llm, leader_hint=hint)
             results.append(SubtaskResult(
                 agent_id=agent.agent_id,
                 role="primary",
@@ -250,6 +332,10 @@ class TeamLeader:
 
         # Extract final answers and vote
         def _extract_final(text: str) -> str:
+            # Try "The answer is: X" (AIME format)
+            m_aime = _re.search(r"[Tt]he answer is:?\s*(\d+)", text)
+            if m_aime:
+                return m_aime.group(1).strip()
             # Try \boxed{...}
             m = _re.search(r"\\boxed\{", text)
             if m:
@@ -415,8 +501,138 @@ class TeamLeader:
             n_rounds=1,
         )
 
+    def _run_debate(self, task: dict, agent_hints: dict = None) -> MASResult:
+        """Debate: agents solve independently (R1), see each other's solutions, critique/revise (R2), vote."""
+        import re as _re
+        agent_hints = agent_hints or {}
+
+        # Round 1: independent solutions
+        r1_responses: dict[str, dict] = {}
+        for agent in self.team:
+            hint = self._get_agent_hint(agent, agent_hints)
+            resp = agent.execute_task(task, self.backbone_llm, leader_hint=hint)
+            r1_responses[agent.agent_id] = resp
+
+        # Round 2: each agent sees others' solutions and revises
+        r2_responses: dict[str, dict] = {}
+        for agent in self.team:
+            others_text = "\n\n".join(
+                f"Agent {aid[:6]} solution:\n{r['response'][:500]}"
+                for aid, r in r1_responses.items() if aid != agent.agent_id
+            )
+            revision_prompt = (
+                f"Original problem: {task.get('prompt', '')[:400]}\n\n"
+                f"Your initial solution:\n{r1_responses[agent.agent_id]['response'][:500]}\n\n"
+                f"Other team members' solutions:\n{others_text}\n\n"
+                "After reviewing your teammates' approaches, revise your solution if needed. "
+                "If your original answer is correct, keep it. If you see a better approach, adopt it.\n"
+                "Provide your final revised solution."
+            )
+            resp = agent.execute_subtask(
+                task=task, subtask_prompt=revision_prompt, context="",
+                backbone_llm=self.backbone_llm, max_tokens=1024,
+            )
+            r2_responses[agent.agent_id] = resp
+
+        # Use R2 responses for voting (same logic as _run_voting)
+        all_responses = {**r1_responses, **r2_responses}
+        # Pick best from R2 by leader preference
+        best_response = r2_responses.get(self.leader.agent_id, {}).get(
+            "response", list(r2_responses.values())[0].get("response", "")
+        )
+        return MASResult(
+            final_answer=best_response,
+            leader_id=self.leader.agent_id,
+            per_agent_responses=r2_responses,
+            per_agent_feedback={},
+            decomposition_plan=[{"agent_id": aid, "role": "debater"} for aid in r2_responses],
+            extra_agents_recruited=[],
+            n_rounds=2,
+        )
+
+    def _run_generator_critic(self, task: dict, agent_hints: dict = None) -> MASResult:
+        """Generator-critic: strongest agent solves, others critique, generator revises."""
+        agent_hints = agent_hints or {}
+
+        # Generator = leader (highest affinity)
+        generator = self.leader
+        critics = [a for a in self.team if a.agent_id != generator.agent_id]
+
+        # Step 1: Generator produces initial solution
+        gen_hint = self._get_agent_hint(generator, agent_hints)
+        gen_resp = generator.execute_task(task, self.backbone_llm, leader_hint=gen_hint)
+        initial_solution = gen_resp.get("response", "")
+
+        # Step 2: Critics review
+        critiques = []
+        for critic in critics:
+            critic_prompt = (
+                f"Problem: {task.get('prompt', '')[:400]}\n\n"
+                f"A teammate's solution:\n{initial_solution[:600]}\n\n"
+                "Review this solution critically. Identify any errors, gaps, or improvements. "
+                "Be specific and constructive. If the solution is correct, say so."
+            )
+            resp = critic.execute_subtask(
+                task=task, subtask_prompt=critic_prompt, context="",
+                backbone_llm=self.backbone_llm, max_tokens=512,
+            )
+            critiques.append(f"Critic {critic.agent_id[:6]}: {resp.get('response', '')[:300]}")
+
+        # Step 3: Generator revises based on critiques
+        critique_text = "\n\n".join(critiques)
+        revision_prompt = (
+            f"Original problem: {task.get('prompt', '')[:400]}\n\n"
+            f"Your initial solution:\n{initial_solution[:600]}\n\n"
+            f"Critiques from teammates:\n{critique_text}\n\n"
+            "Revise your solution based on the feedback. Address valid criticisms."
+        )
+        revised_resp = generator.execute_subtask(
+            task=task, subtask_prompt=revision_prompt, context="",
+            backbone_llm=self.backbone_llm, max_tokens=1024,
+        )
+
+        per_agent = {generator.agent_id: gen_resp}
+        for c in critics:
+            per_agent[c.agent_id] = {"agent_id": c.agent_id, "response": "", "task_type": task.get("type", "")}
+
+        return MASResult(
+            final_answer=revised_resp.get("response", initial_solution),
+            leader_id=generator.agent_id,
+            per_agent_responses=per_agent,
+            per_agent_feedback={},
+            decomposition_plan=[
+                {"agent_id": generator.agent_id, "role": "generator"},
+            ] + [{"agent_id": c.agent_id, "role": "critic"} for c in critics],
+            extra_agents_recruited=[],
+            n_rounds=2,
+        )
+
+    def _run_decompose(self, task: dict, agent_hints: dict = None) -> MASResult:
+        """Decompose: leader breaks into subtasks, assigns, synthesizes. Delegates to existing pipeline."""
+        # Use the existing analyze → decompose → execute → critique → synthesize pipeline
+        analysis = self._analyze_task(task)
+        assignments, newly_recruited = self._decompose_task(task, analysis)
+        results_r1 = self._execute_assignments(assignments, task)
+        if self.critique_enabled:
+            results_r2 = self._critique_round(results_r1, task)
+        else:
+            results_r2 = results_r1
+        final_answer = self._synthesize(results_r2, task)
+        per_agent = {r.agent_id: {"agent_id": r.agent_id, "response": r.response} for r in results_r2}
+        feedback = self._generate_feedback(results_r2, task)
+        return MASResult(
+            final_answer=final_answer,
+            leader_id=self.leader.agent_id,
+            per_agent_responses=per_agent,
+            per_agent_feedback=feedback,
+            decomposition_plan=[{"agent_id": a.agent_id, "role": a.role, "subtask": a.subtask_name}
+                                for a in assignments],
+            extra_agents_recruited=newly_recruited,
+            n_rounds=2 if self.critique_enabled else 1,
+        )
+
     # ------------------------------------------------------------------
-    # Internal steps
+    # Internal steps (used by decompose path)
     # ------------------------------------------------------------------
 
     def _analyze_task(self, task: dict) -> dict:

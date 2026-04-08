@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH -J evopool_e40_evopool_aime_think
 #SBATCH -A hw-grp
-#SBATCH -p hw-grp
+#SBATCH -p hw-grp,share,preempt
 #SBATCH --gres=gpu:0
-#SBATCH -t 12:00:00
+#SBATCH -t 24:00:00
 #SBATCH --mem=64G
 #SBATCH -c 4
 #SBATCH -o /nfs/hpc/share/zhanyaol/claude-code/logs/e40_evopool_aime_think_%j.out
@@ -36,7 +36,7 @@ mkdir -p results/e40
 python -u run_experiment.py \
     --condition "evopool_full" \
     --benchmark hard_math_stream \
-    --n_per_domain 30 \
+    --n_per_domain all \
     --pool_size 20 \
     --team_size 3 \
     --backbone_llm "qwen3-8b" \

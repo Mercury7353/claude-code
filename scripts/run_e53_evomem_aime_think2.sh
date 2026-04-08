@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J evopool_e53_evomem_aime_think2
 #SBATCH -A hw-grp
-#SBATCH -p hw-grp
+#SBATCH -p hw-grp,share,preempt
 #SBATCH --gres=gpu:0
 #SBATCH -t 8:00:00
 #SBATCH --mem=32G

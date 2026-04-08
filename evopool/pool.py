@@ -226,21 +226,36 @@ class EvoPool:
             }
             agent.update_from_feedback(task, outcome, self.config.backbone_llm)
 
-        # 5. Co-Dream (5-phase: reflect → contrast → imagine → debate → crystallize)
-        # Build a lightweight single-response evaluator for insight verification.
-        # evaluator(task, response_str) -> float  (not counted in benchmark)
-        def _single_response_eval(t, response_str):
-            try:
-                result = evaluator(t, {a.agent_id: response_str for a in team[:1]})
-                return result.get("team_score", 0.0)
-            except Exception:
-                return 0.0
+        # 4b. Generate experience entries for each agent (1 LLM call each)
+        for agent in team:
+            agent_resp = responses.get(agent.agent_id, {})
+            agent_score = evaluation.get(agent.agent_id, team_score)
+            agent.generate_experience(
+                task, agent_resp.get("response", ""), agent_score,
+                self.config.backbone_llm,
+            )
+            # Update relevance weights of previously injected experiences
+            agent.update_experience_weights(task, agent_score)
 
-        # E27: no-verify mode skips the verify gate (evaluator_fn=None → apply all insights)
-        use_evaluator = (
-            self.config.codream_mode != "none"
-            and not self.config.codream_no_verify
-        )
+        # 4c. Leader records leadership experience (which structure worked/failed)
+        if self.config.mas_mode == "leader" and leader_id and mas_result:
+            from .agent import Experience
+            leader_agent = next((a for a in team if a.agent_id == leader_id), None)
+            if leader_agent:
+                structure = getattr(mas_result, 'structure_chosen', 'unknown')
+                leader_agent.profile.experience_buffer.append(Experience(
+                    task_id=task.get("id", ""),
+                    domain=task.get("domain", ""),
+                    task_type=task.get("type", ""),
+                    score=team_score,
+                    strategy_summary=f"Chose '{structure}' for {task.get('type','')} task",
+                    lesson=f"Structure '{structure}' → team_score={team_score:.1f}",
+                    source="leadership",
+                ))
+
+        # 5. Co-Dream (full 5-phase: reflect → contrast → imagine → debate → crystallize)
+        # No longer uses expensive re-attempt verification. Insights are stored as
+        # Experience entries with relevance_weight that naturally decays if unhelpful.
         codream_session = run_codream(
             team=team,
             task=task,
@@ -248,7 +263,7 @@ class EvoPool:
             backbone_llm=self.config.backbone_llm,
             mode=self.config.codream_mode,
             strength_threshold=self.config.codream_strength_threshold,
-            evaluator_fn=_single_response_eval if use_evaluator else None,
+            evaluator_fn=None,  # no re-attempt verify; use relevance_weight decay instead
             disable_l3=self.config.codream_disable_l3,
             disable_l2=self.config.codream_disable_l2,
             enhanced=self.config.codream_enhanced,
@@ -314,6 +329,7 @@ class EvoPool:
             "leader_agent_id": leader_id,
             "extra_agents_recruited": extra_recruited,
             "decomposition_plan": decomposition_plan,
+            "mas_structure": mas_result.structure_chosen if (self.config.mas_mode == "leader" and mas_result) else "flat",
             "codream_insights": len(cd.insights) if cd else 0,
             "codream_generated": cd.n_insights_generated if cd else 0,
             "codream_verified": cd.n_insights_verified if cd else 0,

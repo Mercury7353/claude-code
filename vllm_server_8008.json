@@ -1,1 +1,1 @@
-{"host":"10.217.117.48","port":8008,"model":"/nfs/hpc/share/zhanyaol/models/Qwen3-8B","url":"http://10.217.117.48:8008","job_id":"20140872","node":"dgxh-4"}
+{"host":"10.217.117.45","port":8008,"model":"/nfs/hpc/share/zhanyaol/models/Qwen3-8B","url":"http://10.217.117.45:8008","job_id":"20148785","node":"dgxh-1"}

@@ -31,11 +31,13 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 
 from evopool.benchmarks.aflow_stream import load_aflow_stream, AFlowEvaluator
 from evopool.benchmarks.hard_math_stream import load_hard_math_stream, HardMathEvaluator
+from evopool.benchmarks.hard_code_stream import load_hard_code_stream, HardCodeEvaluator
 from evopool.eval.metrics import summarize_results, print_comparison_table
 
 
@@ -44,7 +46,8 @@ def main():
     parser.add_argument("--condition", type=str, required=True, help="System to evaluate")
     parser.add_argument("--benchmark", type=str, default="aflow_stream")
     parser.add_argument("--n_tasks", type=int, default=60, help="Total tasks in stream")
-    parser.add_argument("--n_per_domain", type=int, default=10, help="Tasks per domain")
+    parser.add_argument("--n_per_domain", type=str, default="10",
+                        help="Tasks per domain (int or 'all' for all available)")
     parser.add_argument("--pool_size", type=int, default=20)
     parser.add_argument("--team_size", type=int, default=3)
     parser.add_argument("--backbone_llm", type=str, default="claude-sonnet-4-6")
@@ -52,15 +55,18 @@ def main():
     parser.add_argument("--output_dir", type=str, default="results/")
     parser.add_argument("--domains", type=str, default=None,
                         help="Comma-separated domain list (default: all 6)")
+    parser.add_argument("--shuffle_all", action="store_true",
+                        help="Shuffle all tasks across domains (destroys domain ordering)")
     parser.add_argument("--save_pool", type=str, default=None,
                         help="Path to save final pool state (EvoPool only)")
     parser.add_argument("--load_pool", type=str, default=None,
                         help="Path to load pre-trained pool state (EvoPool only, warm start)")
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_dir = args.output_dir
+    os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(
-        args.output_dir, f"{args.condition}_{args.benchmark}_seed{args.seed}.json"
+        output_dir, f"{args.condition}_{args.benchmark}_seed{args.seed}.json"
     )
 
     print(f"=== EvoPool Experiment ===")
@@ -78,7 +84,7 @@ def main():
         domains = ["gsm8k"]
         n_per_domain = args.n_tasks
     else:
-        n_per_domain = args.n_per_domain
+        n_per_domain = None if args.n_per_domain == "all" else int(args.n_per_domain)
 
     print(f"Loading tasks (benchmark={args.benchmark}, n_per_domain={n_per_domain})...")
     if args.benchmark == "hard_math_stream":
@@ -89,6 +95,14 @@ def main():
             shuffle=True,
         )
         evaluator = HardMathEvaluator()
+    elif args.benchmark == "hard_code_stream":
+        tasks = load_hard_code_stream(
+            domains=domains,
+            n_per_domain=n_per_domain,
+            seed=args.seed,
+            shuffle=True,
+        )
+        evaluator = HardCodeEvaluator()
     else:
         tasks = load_aflow_stream(
             n_per_domain=n_per_domain,
@@ -99,17 +113,52 @@ def main():
         evaluator = AFlowEvaluator()
     print(f"Loaded {len(tasks)} tasks")
 
+    # Optionally shuffle all tasks across domains (E56 ablation)
+    if args.shuffle_all:
+        import random as _rng
+        _rng.Random(args.seed).shuffle(tasks)
+        print(f"  Shuffled all {len(tasks)} tasks across domains")
+
     # Initialize system
     system = _build_system(args)
 
-    # Run experiment
+    # Run experiment (with checkpoint for crash recovery)
     all_scores = []
     domain_scores: dict[str, list[float]] = {}
     results_per_task = []
     start_time = time.time()
+    checkpoint_file = os.path.join(output_dir, "_checkpoint.json")
+
+    # Resume from checkpoint if exists
+    start_idx = 0
+    if os.path.exists(checkpoint_file):
+        try:
+            ckpt = json.load(open(checkpoint_file))
+            results_per_task = ckpt.get("per_task_results", [])
+            start_idx = len(results_per_task)
+            all_scores = [r["score"] for r in results_per_task]
+            for r in results_per_task:
+                d = r.get("domain", "unknown")
+                if d not in domain_scores:
+                    domain_scores[d] = []
+                domain_scores[d].append(r["score"])
+            print(f"Resumed from checkpoint: {start_idx} tasks done")
+        except Exception:
+            start_idx = 0
+
+    # Heartbeat: print every 2 min so watchdog doesn't kill long tasks
+    _heartbeat_stop = threading.Event()
+    def _heartbeat():
+        while not _heartbeat_stop.wait(120):
+            print(f"  [heartbeat] alive, processing task... ({time.strftime('%H:%M:%S')})", flush=True)
+    _hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+    _hb_thread.start()
 
     for i, task in enumerate(tasks):
+        if i < start_idx:
+            continue  # skip already-completed tasks
         try:
+            print(f"  Starting task {i+1}/{len(tasks)} ({task.get('domain','?')}/{task.get('id','?')})...", flush=True)
             result = system.process_task(task, evaluator)
             score = result["team_score"]
             all_scores.append(score)
@@ -140,15 +189,40 @@ def main():
                 recent_mean = sum(all_scores[-10:]) / 10
                 elapsed = time.time() - start_time
                 print(f"  Task {i+1}/{len(tasks)} | Recent mean: {recent_mean:.3f} | Elapsed: {elapsed:.0f}s")
+                # Checkpoint every 10 tasks for crash recovery
+                json.dump({"per_task_results": results_per_task}, open(checkpoint_file, "w"))
 
         except KeyboardInterrupt:
             print(f"\nInterrupted at task {i}. Saving partial results...")
+            json.dump({"per_task_results": results_per_task}, open(checkpoint_file, "w"))
             break
         except Exception as e:
+            err_str = str(e)
+            if "Connection" in err_str or "refused" in err_str:
+                # vLLM likely restarting — wait and retry this task
+                print(f"  Task {i} connection error, waiting 60s for vLLM recovery...")
+                time.sleep(60)
+                try:
+                    result = system.process_task(task, evaluator)
+                    score = result["team_score"]
+                    all_scores.append(score)
+                    domain = task.get("domain", "unknown")
+                    if domain not in domain_scores:
+                        domain_scores[domain] = []
+                    domain_scores[domain].append(score)
+                    results_per_task.append({
+                        "task_index": i, "task_id": task.get("id"),
+                        "task_type": task.get("type"), "domain": domain,
+                        "score": score, "retried": True,
+                    })
+                    continue
+                except Exception as e2:
+                    print(f"  Task {i} retry also failed: {e2}")
             print(f"  Task {i} failed: {e}")
             traceback.print_exc()
             all_scores.append(0.0)
 
+    _heartbeat_stop.set()
     elapsed = time.time() - start_time
 
     # Compute summary metrics

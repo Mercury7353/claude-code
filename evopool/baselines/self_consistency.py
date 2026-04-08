@@ -44,8 +44,23 @@ class SelfConsistencyPool:
 
         if domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion"):
             system = "You are an expert Python programmer. Write clean, correct, and efficient code."
+            # Include entry_point and test cases so model uses correct function name
+            entry_point = task.get("entry_point", "")
+            if not entry_point:
+                import re as _re
+                for tc in (task.get("test_cases") or []):
+                    _m = _re.search(r"assert\s+(\w+)\s*\(", str(tc))
+                    if _m:
+                        entry_point = _m.group(1)
+                        break
+            hint = ""
+            if entry_point:
+                hint += f"\n\n[REQUIRED FUNCTION NAME: {entry_point}]"
+            test_cases = task.get("test_cases", [])
+            if test_cases:
+                hint += "\n\nTest cases:\n" + "\n".join(str(tc) for tc in test_cases[:3])
             user = (
-                base_prompt
+                base_prompt + hint
                 + "\n\nIMPORTANT: Output ONLY the complete Python function implementation "
                 "in a markdown code block (```python ... ```) with no explanation outside the block."
             )

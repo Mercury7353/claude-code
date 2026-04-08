@@ -15,6 +15,19 @@ from .llm import llm_call
 
 
 @dataclass
+class Experience:
+    """A concrete solving experience stored in an agent's private buffer."""
+    task_id: str
+    domain: str              # e.g. "aime_2022", "gsm8k", "math_hard"
+    task_type: str           # e.g. "math_competition_hard", "multi_hop_qa"
+    score: float             # 0.0 or 1.0
+    strategy_summary: str    # 1-2 sentences: what approach was used
+    lesson: str              # 1 sentence: what to do/avoid next time
+    source: str = "self"     # "self" | "codream:<agent_id>"
+    relevance_weight: float = 1.0  # decays if unhelpful, grows if useful
+
+
+@dataclass
 class AgentProfile:
     """Structured agent profile. This is the evolving identity of an agent."""
 
@@ -23,8 +36,10 @@ class AgentProfile:
     task_history: list[dict]  # last N tasks: {type, outcome, score}
     collab_log: dict[str, list[str]]  # agent_id -> [what I learned from them]
     perf_stats: dict[str, list[float]]  # domain -> rolling performance scores
+    experience_buffer: list[Experience] = field(default_factory=list)  # private experiences
 
     TASK_HISTORY_LIMIT: int = field(default=20, repr=False, compare=False)
+    EXPERIENCE_BUFFER_LIMIT: int = field(default=50, repr=False, compare=False)
 
     def to_dict(self) -> dict:
         d = {
@@ -33,29 +48,40 @@ class AgentProfile:
             "task_history": self.task_history[-self.TASK_HISTORY_LIMIT:],
             "collab_log": self.collab_log,
             "perf_stats": {k: v[-20:] for k, v in self.perf_stats.items()},
+            "experience_buffer": [
+                {"task_id": e.task_id, "domain": e.domain, "task_type": e.task_type,
+                 "score": e.score, "strategy_summary": e.strategy_summary,
+                 "lesson": e.lesson, "source": e.source,
+                 "relevance_weight": e.relevance_weight}
+                for e in self.experience_buffer[-self.EXPERIENCE_BUFFER_LIMIT:]
+            ],
         }
-        # Persist all memory tiers
+        # Persist all memory tiers (legacy — kept for backward compat)
         if hasattr(self, "subdomain_insights") and self.subdomain_insights:
             d["subdomain_insights"] = self.subdomain_insights
         if hasattr(self, "domain_insights") and self.domain_insights:
-            d["domain_insights"] = self.domain_insights  # L2.5
+            d["domain_insights"] = self.domain_insights
         if hasattr(self, "working_memory") and self.working_memory:
             d["working_memory"] = self.working_memory
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> AgentProfile:
+        exp_buf = [
+            Experience(**e) for e in d.get("experience_buffer", [])
+        ]
         obj = cls(
             persona=d["persona"],
             skill_memory=d["skill_memory"],
             task_history=d["task_history"],
             collab_log=d["collab_log"],
             perf_stats=d["perf_stats"],
+            experience_buffer=exp_buf,
         )
         if "subdomain_insights" in d:
             obj.subdomain_insights = d["subdomain_insights"]
         if "domain_insights" in d:
-            obj.domain_insights = d["domain_insights"]  # L2.5
+            obj.domain_insights = d["domain_insights"]
         if "working_memory" in d:
             obj.working_memory = d["working_memory"]
         return obj
@@ -66,14 +92,63 @@ class AgentProfile:
         skills_str = ", ".join(f"{k}({v:.2f})" for k, v in top_skills)
         recent_tasks = self.task_history[-5:]
         task_types = [t["type"] for t in recent_tasks]
-        hypotheses = getattr(self, "hypotheses", [])
-        hyp_str = f"\nActive hypotheses: {hypotheses[:2]}" if hypotheses else ""
         return (
             f"Persona: {self.persona}\n"
             f"Top skills: {skills_str}\n"
             f"Recent task types: {task_types}"
-            f"{hyp_str}"
         )
+
+    def compute_persona(self) -> str:
+        """Generate persona from actual performance data (replaces LLM rewrite)."""
+        domain_stats: dict[str, tuple[int, int]] = {}
+        for exp in self.experience_buffer:
+            d = exp.domain
+            c, t = domain_stats.get(d, (0, 0))
+            domain_stats[d] = (c + int(exp.score >= 0.5), t + 1)
+
+        strong = [(d, c / t) for d, (c, t) in domain_stats.items() if t >= 3 and c / t >= 0.6]
+        weak = [(d, c / t) for d, (c, t) in domain_stats.items() if t >= 3 and c / t < 0.4]
+
+        # Top strategies from high-weight successful experiences
+        good_exps = sorted(
+            [e for e in self.experience_buffer if e.score >= 0.5],
+            key=lambda e: -e.relevance_weight,
+        )[:3]
+
+        parts = []
+        if strong:
+            parts.append("Strong: " + ", ".join(f"{d}({r:.0%})" for d, r in strong))
+        if weak:
+            parts.append("Weak: " + ", ".join(f"{d}({r:.0%})" for d, r in weak))
+        if good_exps:
+            parts.append("Strategies: " + "; ".join(e.strategy_summary[:60] for e in good_exps))
+        return ". ".join(parts) if parts else self.persona
+
+    def get_relevant_experiences(self, task: dict, max_k: int = 3) -> list[Experience]:
+        """Retrieve top-k relevant experiences for a task (same domain, highest weight)."""
+        domain = task.get("domain", "")
+        task_type = task.get("type", "")
+        # Match by domain first, then by task_type
+        relevant = [
+            e for e in self.experience_buffer
+            if e.domain == domain or e.task_type == task_type
+        ]
+        if not relevant:
+            return []
+        # Sort by relevance_weight desc, then recency (later = more recent)
+        relevant.sort(key=lambda e: (-e.relevance_weight,))
+        return relevant[:max_k]
+
+    def format_experience_hint(self, task: dict) -> str:
+        """Format relevant experiences as a short user-prompt injection (<100 tokens)."""
+        exps = self.get_relevant_experiences(task, max_k=3)
+        if not exps:
+            return ""
+        lines = ["[Past experience on similar problems]:"]
+        for e in exps:
+            mark = "✓" if e.score >= 0.5 else "✗"
+            lines.append(f"- {mark} \"{e.strategy_summary}\" ({e.task_id}, {'solved' if e.score >= 0.5 else 'failed'})")
+        return "\n".join(lines)
 
     def affinity_for(self, task_type: str) -> float:
         """Affinity score for a task type (used in selection + leader assignment)."""
@@ -123,12 +198,8 @@ class Agent:
     # ------------------------------------------------------------------
 
     def build_system_prompt(self) -> str:
-        """Build the agent's system prompt from its profile."""
-        return (
-            "You are an AI agent with the following profile:\n\n"
-            f"{self.profile.summarize()}\n\n"
-            "Use your accumulated experience and specializations to complete the task."
-        )
+        """Build system prompt. Kept minimal — private context comes via user prompt."""
+        return "You are a helpful AI assistant."
 
     def execute_subtask(
         self,
@@ -217,46 +288,50 @@ class Agent:
         )
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 
-    def execute_task(self, task: dict, backbone_llm: str) -> dict:
-        """Execute a task and return result dict (used by self-consistency math/QA path)."""
+    def execute_task(self, task: dict, backbone_llm: str, temperature: float = 0.7,
+                     leader_hint: str = "") -> dict:
+        """Execute a task independently. Returns response dict.
+
+        Args:
+            leader_hint: optional per-agent guidance from the team leader (injected into prompt).
+        """
         system_prompt = self.build_system_prompt()
         user_prompt = task.get("prompt", task.get("question", str(task)))
         domain = task.get("domain", "")
         task_type = task.get("type", "")
         is_code = domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion")
-        # Add format hint for self-consistency paths (math only — QA hint hurts reasoning)
+        is_hard_math = (
+            task_type in ("aime_problem", "math_competition_hard")
+            or domain.startswith("aime_") or domain == "math_hard"
+        )
+
+        # Format hints by task type
         if domain == "gsm8k" or task_type == "math_word_problem":
-            user_prompt = user_prompt + "\n\nSolve step by step. End your answer with: #### <final number>"
-        elif task_type in ("math_competition", "arithmetic") or domain == "math":
-            user_prompt = (
-                user_prompt
-                + "\n\nSolve step by step. Before finalizing, verify your answer "
-                "by checking it against the original problem or using an alternative approach. "
-                "Express your final answer in LaTeX inside \\boxed{}. "
-                "For example: \\boxed{\\frac{3}{5}} or \\boxed{42} or \\boxed{x+1}."
+            user_prompt += "\n\nSolve step by step. End your answer with: #### <final number>"
+        elif task_type in ("math_competition", "math_competition_hard", "arithmetic") or domain in ("math", "math_hard"):
+            user_prompt += (
+                "\n\nSolve step by step. Verify your answer by checking it against the "
+                "original problem. Express your final answer in LaTeX inside \\boxed{}."
+            )
+        elif task_type == "aime_problem" or domain.startswith("aime_"):
+            user_prompt += (
+                "\n\nSolve step by step. AIME answers are integers from 000 to 999. "
+                "State your final answer as: The answer is: [integer]"
             )
 
-        # Inject domain_general, subdomain, and working memory hints for math/QA paths.
-        domain_hint = _get_domain_hint(self.profile, task)
-        if domain_hint:
-            user_prompt = domain_hint + "\n\n" + user_prompt
-        if not is_code:
-            subdomain_hint = _get_subdomain_hint(self.profile, task)
-            if subdomain_hint:
-                user_prompt = subdomain_hint + "\n\n" + user_prompt
-            wm_hint = _get_working_memory_hint(self.profile, task)
-            if wm_hint:
-                user_prompt = wm_hint + "\n\n" + user_prompt
+        # Inject private experience (concrete, lightweight, ≤100 tokens)
+        exp_hint = self.profile.format_experience_hint(task)
+        if exp_hint:
+            user_prompt = exp_hint + "\n\n" + user_prompt
 
-        # Hard math (AIME) needs extended thinking + generous token budget.
-        # Regular math needs moderate budget; QA/code can be short.
-        is_hard_math = task_type in ("aime_problem", "math_competition_hard") or domain.startswith("aime_") or domain == "math_hard"
-        is_math = is_hard_math or domain in ("gsm8k", "math") or task_type in (
-            "math_word_problem", "math_competition", "arithmetic"
-        )
+        # Inject leader's per-agent guidance if provided
+        if leader_hint:
+            user_prompt = f"[Team leader guidance]: {leader_hint}\n\n" + user_prompt
+
+        # Token budgets
         if is_hard_math:
-            max_tokens = 3000  # EvoPool prompt ~1500-2000 tokens; 3000 output leaves headroom
-        elif is_math:
+            max_tokens = 4096
+        elif domain in ("gsm8k", "math") or task_type in ("math_word_problem", "math_competition", "arithmetic"):
             max_tokens = 1024
         else:
             max_tokens = 512
@@ -266,9 +341,10 @@ class Agent:
             system=system_prompt,
             user=user_prompt,
             max_tokens=max_tokens,
+            temperature=temperature,
             enable_thinking=is_hard_math,
         )
-        return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
+        return {"agent_id": self.agent_id, "response": response, "task_type": task_type}
 
     # ------------------------------------------------------------------
     # Individual profile evolution (post-task)
@@ -307,10 +383,6 @@ class Agent:
             "task_id": task.get("id", ""),
         })
 
-        # Update persona (LLM call, lightweight)
-        if self.task_count % 5 == 0:  # Only update persona every 5 tasks to save cost
-            self._update_persona(task, outcome, backbone_llm)
-
         self.task_count += 1
 
         # Track underperformance for prune trigger
@@ -320,32 +392,75 @@ class Agent:
         else:
             self.consecutive_underperformance = 0
 
-    def _update_persona(self, task: dict, outcome: dict, backbone_llm: str) -> None:
-        """Incrementally update the persona string (max 20% semantic drift).
+    def generate_experience(self, task: dict, response: str, score: float,
+                            backbone_llm: str) -> None:
+        """After evaluation, generate a concrete experience entry (1 LLM call)."""
+        task_id = task.get("id", "unknown")
+        domain = task.get("domain", "")
+        task_type = task.get("type", "")
+        prompt_snippet = task.get("prompt", task.get("question", ""))[:200]
 
-        Extracts and preserves [General strategy] entries added by Co-Dream (Fix 2a)
-        before the LLM rewrites the persona — otherwise they would be silently lost
-        every 5 tasks since the LLM outputs only a new 1-2 sentence persona.
-        """
-        import re as _re
-        # Extract general strategies to re-append after update
-        strategy_entries = _re.findall(r"\n\[General strategy\]:.*", self.profile.persona)
-        # Build the base persona (without strategy annotations) for the LLM to revise
-        base_persona = _re.sub(r"\n\[General strategy\]:.*", "", self.profile.persona).strip()
-        prompt = (
-            f"Current agent persona:\n{base_persona}\n\n"
-            f"Recent task: type={task.get('type')}, score={outcome.get('score', 0.5):.2f}\n"
-            f"Top skills: {self.profile.dominant_domains()}\n\n"
-            "Revise the persona (1-2 sentences) to incrementally reflect any emerging "
-            "specializations. Keep changes subtle and incremental. Do NOT drastically "
-            "change the identity. Output only the revised persona text."
-        )
+        if score >= 0.5:
+            gen_prompt = (
+                f"You just solved a {task_type} problem correctly.\n"
+                f"Problem: {prompt_snippet}...\n"
+                f"Your response (first 300 chars): {response[:300]}...\n\n"
+                "In 1-2 short sentences each, provide:\n"
+                '{"strategy": "what approach/method you used", "lesson": "key takeaway for similar problems"}'
+            )
+        else:
+            gen_prompt = (
+                f"You failed a {task_type} problem (score={score:.1f}).\n"
+                f"Problem: {prompt_snippet}...\n"
+                f"Your response (first 300 chars): {response[:300]}...\n\n"
+                "In 1-2 short sentences each, provide:\n"
+                '{"strategy": "what approach you tried", "lesson": "what to do differently next time"}'
+            )
         try:
-            new_persona = llm_call(model=backbone_llm, user=prompt, max_tokens=100)
-            # Re-attach preserved general strategies so they survive the persona rewrite
-            self.profile.persona = new_persona.strip() + "".join(strategy_entries)
+            raw = llm_call(model=backbone_llm, user=gen_prompt, max_tokens=150)
+            data = json.loads(raw.strip()) if "{" in raw else {"strategy": raw[:80], "lesson": ""}
+            exp = Experience(
+                task_id=task_id, domain=domain, task_type=task_type, score=score,
+                strategy_summary=data.get("strategy", "")[:100],
+                lesson=data.get("lesson", "")[:100],
+                source="self",
+            )
+            self.profile.experience_buffer.append(exp)
+            # Cap buffer per domain (keep most recent + highest weight)
+            self._trim_experience_buffer()
         except Exception:
-            pass  # Keep current persona on failure
+            # Fallback: store minimal experience without LLM
+            self.profile.experience_buffer.append(Experience(
+                task_id=task_id, domain=domain, task_type=task_type, score=score,
+                strategy_summary="(no summary)", lesson="(no lesson)", source="self",
+            ))
+
+    def _trim_experience_buffer(self) -> None:
+        """Keep buffer within limit, prioritizing recent + high-weight entries."""
+        buf = self.profile.experience_buffer
+        if len(buf) <= self.profile.EXPERIENCE_BUFFER_LIMIT:
+            return
+        # Sort by relevance_weight desc, then recency (index)
+        indexed = [(i, e) for i, e in enumerate(buf)]
+        indexed.sort(key=lambda x: (-x[1].relevance_weight, -x[0]))
+        keep_indices = set(i for i, _ in indexed[:self.profile.EXPERIENCE_BUFFER_LIMIT])
+        self.profile.experience_buffer = [e for i, e in enumerate(buf) if i in keep_indices]
+
+    def update_experience_weights(self, task: dict, score: float) -> None:
+        """After a task, adjust relevance_weight of experiences that were injected.
+
+        Natural verification: useful strategies survive, useless ones decay.
+        """
+        relevant = self.profile.get_relevant_experiences(task, max_k=3)
+        for exp in relevant:
+            if score >= 0.5:
+                exp.relevance_weight = min(2.0, exp.relevance_weight + 0.1)
+            else:
+                exp.relevance_weight = max(0.0, exp.relevance_weight - 0.2)
+        # Prune dead-weight experiences
+        self.profile.experience_buffer = [
+            e for e in self.profile.experience_buffer if e.relevance_weight > 0.1
+        ]
 
     # ------------------------------------------------------------------
     # Co-Dream integration (called by Co-Dream mechanism)

@@ -74,6 +74,22 @@ class EvoMemPool:
         task_type = task.get("type", "general")
         task_prompt = task.get("prompt", str(task))
 
+        # For code tasks, include function name and test cases
+        if domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion"):
+            import re as _re
+            entry_point = task.get("entry_point", "")
+            if not entry_point:
+                for tc in (task.get("test_cases") or []):
+                    _m = _re.search(r"assert\s+(\w+)\s*\(", str(tc))
+                    if _m:
+                        entry_point = _m.group(1)
+                        break
+            if entry_point:
+                task_prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + task_prompt
+            test_cases = task.get("test_cases", [])
+            if test_cases:
+                task_prompt += "\n\nTest cases:\n" + "\n".join(str(tc) for tc in test_cases[:3])
+
         is_hard_math = (
             task_type in ("aime_problem", "math_competition_hard")
             or domain.startswith("aime_")

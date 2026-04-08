@@ -171,18 +171,38 @@ class HardMathEvaluator:
             return self._eval_math(answer, response)
 
     def _eval_aime(self, expected: str, response: str) -> float:
-        """AIME answer is integer 0-999. Extract last integer from response."""
+        """AIME answer is integer 0-999. Try multiple extraction strategies."""
         expected = expected.strip()
-        # Look for "The answer is: X" pattern first
-        m = re.search(r"[Tt]he answer is:?\s*(\d+)", response)
-        if m:
-            pred = m.group(1).strip()
-            return 1.0 if pred == expected else 0.0
-        # Fall back: last 3-digit (or less) integer in response
-        nums = re.findall(r"\b(\d{1,3})\b", response[-400:])
+
+        def _check(pred: str) -> bool:
+            return pred.lstrip("0") == expected.lstrip("0") or pred == expected
+
+        # Strategy 1: explicit "The answer is: X" or "answer is X"
+        for pat in [
+            r"[Tt]he answer is:?\s*(\d+)",
+            r"[Aa]nswer:?\s*(\d+)",
+            r"[Ff]inal answer:?\s*(\d+)",
+        ]:
+            m = re.search(pat, response)
+            if m and _check(m.group(1)):
+                return 1.0
+            if m:  # found but wrong answer — trust this extraction
+                return 0.0
+
+        # Strategy 2: \boxed{integer}
+        boxed = re.findall(r"\\boxed\{(\d{1,3})\}", response)
+        if boxed and _check(boxed[-1]):
+            return 1.0
+        if boxed:
+            return 0.0
+
+        # Strategy 3: last 1-3 digit integer in the final portion of response
+        tail = response[-600:]
+        nums = re.findall(r"\b(\d{1,3})\b", tail)
+        if nums and _check(nums[-1]):
+            return 1.0
         if nums:
-            pred = nums[-1]
-            return 1.0 if pred == expected else 0.0
+            return 0.0
         return 0.0
 
     def _eval_math(self, expected: str, response: str) -> float:

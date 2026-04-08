@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J evopool_e48_nolifecycle_aime
 #SBATCH -A hw-grp
-#SBATCH -p hw-grp
+#SBATCH -p hw-grp,share,preempt
 #SBATCH --gres=gpu:0
 #SBATCH -t 10:00:00
 #SBATCH --mem=64G

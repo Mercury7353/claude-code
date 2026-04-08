@@ -82,7 +82,24 @@ class DyLANPool:
 
     def _task_to_question(self, task: dict) -> str:
         """Convert our task dict to a question string for DyLAN."""
-        return task.get("prompt", str(task.get("question", str(task))))
+        prompt = task.get("prompt", str(task.get("question", str(task))))
+        # For code tasks, include function name and test cases
+        domain = task.get("domain", "")
+        if domain in ("mbpp", "humaneval") or task.get("type") in ("code_generation", "code_completion"):
+            import re as _re
+            entry_point = task.get("entry_point", "")
+            if not entry_point:
+                for tc in (task.get("test_cases") or []):
+                    _m = _re.search(r"assert\s+(\w+)\s*\(", str(tc))
+                    if _m:
+                        entry_point = _m.group(1)
+                        break
+            if entry_point:
+                prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + prompt
+            test_cases = task.get("test_cases", [])
+            if test_cases:
+                prompt += "\n\nTest cases:\n" + "\n".join(str(tc) for tc in test_cases[:3])
+        return prompt
 
     def process_task(self, task: dict, evaluator) -> dict:
         """

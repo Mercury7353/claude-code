@@ -27,12 +27,34 @@ def load_server_info() -> dict | None:
     return None
 
 
-def _get_local_url() -> str:
+def _get_local_url(force_refresh: bool = False) -> str:
     """
     Return a vLLM server URL for load balancing.
-    Checks EVOPOOL_LOCAL_LLM_URLS (comma-separated) first, then EVOPOOL_LOCAL_LLM_URL.
-    Picks randomly among available URLs for simple load balancing.
+    On force_refresh (after connection error), re-reads server JSON files
+    to pick up new URLs from restarted vLLM instances.
     """
+    if force_refresh:
+        # Re-read server config files (vLLM might have restarted with new URL)
+        import json as _json
+        import glob as _glob
+        urls = []
+        for jf in _glob.glob("vllm_server_*.json"):
+            try:
+                with open(jf) as f:
+                    url = _json.load(f).get("url", "")
+                    if url:
+                        # Quick health check: only add if server responds
+                        import requests as _req
+                        try:
+                            _req.get(f"{url}/v1/models", timeout=3)
+                            urls.append(url)
+                        except Exception:
+                            pass  # skip dead servers
+            except Exception:
+                pass
+        if urls:
+            os.environ["EVOPOOL_LOCAL_LLM_URLS"] = ",".join(urls)
+
     multi = os.environ.get("EVOPOOL_LOCAL_LLM_URLS", "")
     if multi:
         urls = [u.strip() for u in multi.split(",") if u.strip()]
@@ -69,7 +91,8 @@ def llm_call(
 
     for attempt in range(retry):
         try:
-            local_url = _get_local_url()
+            # Re-read server URL each attempt (handles vLLM restart with new URL)
+            local_url = _get_local_url(force_refresh=(attempt > 0))
             if local_url and not model.startswith(("claude", "gpt-", "o1", "o3", "o4")):
                 return _call_local(model, user, system, max_tokens, temperature, local_url, enable_thinking=enable_thinking)
             elif model.startswith("claude"):
@@ -83,7 +106,11 @@ def llm_call(
         except Exception as e:
             if attempt == retry - 1:
                 raise
-            time.sleep(retry_delay * (attempt + 1))
+            # Wait longer on connection errors (vLLM might be restarting)
+            wait = retry_delay * (attempt + 1)
+            if "Connection" in str(e) or "refused" in str(e):
+                wait = max(wait, 30)  # at least 30s for connection errors
+            time.sleep(wait)
     return ""
 
 
@@ -107,17 +134,36 @@ def _call_openai(model: str, user: str, system: str, max_tokens: int, temperatur
     from openai import OpenAI
 
     client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+    # Reasoning models (o3*, gpt-5.x-pro) use responses API, not chat completions
+    if model in ("o3", "o3-pro", "o3-mini") or model.endswith("-pro"):
+        full_input = f"{system}\n\n{user}" if system else user
+        response = client.responses.create(
+            model=model,
+            input=full_input,
+            max_output_tokens=max_tokens,
+        )
+        return response.output_text
+
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": user})
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
+    # GPT-5.x uses max_completion_tokens instead of max_tokens
+    if model.startswith("gpt-5"):
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_completion_tokens=max_tokens,
+        )
+    else:
+        response = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
     return response.choices[0].message.content
 
 

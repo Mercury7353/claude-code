@@ -197,19 +197,33 @@ def run_codream(
     # Build shared context (include recent failure history for pattern-grounded crystallize)
     task_context = _build_task_context(task, task_results)
 
-    # --- Phase 1: REFLECT (failure path only) ---
+    # --- Full 5-phase CoDream pipeline ---
+
+    # Phase 1: REFLECT — each agent diagnoses what went wrong/right
     reflections = _phase_reflect(team, task_context, task_results, backbone_llm)
     session.reflections = reflections
 
-    # Failure path — CRYSTALLIZE directly from reflections
-    insights = _phase_crystallize_from_reflections(
+    # Phase 2: CONTRAST — failing agents compare approach to best performer
+    contrasts = _phase_contrast(team, task_results, task_context, reflections, backbone_llm)
+    session.contrasts = contrasts
+
+    # Phase 3: IMAGINE — agents propose strategy transfers grounded in contrast
+    imaginations = _phase_imagine(team, reflections, contrasts, task_context, backbone_llm)
+    session.imaginations = imaginations
+
+    # Phase 4: DEBATE — peers challenge each other's proposals (1 round)
+    debates = _phase_debate(team, imaginations, task_context, backbone_llm, mode, strength_threshold)
+    session.debates = debates
+
+    # Phase 5: CRYSTALLIZE — distill surviving proposals into structured insights
+    insights = _phase_crystallize(
         team=team,
-        reflections=reflections,
+        imaginations=imaginations,
+        debates=debates,
         task_context=task_context,
         backbone_llm=backbone_llm,
         mode=mode,
         strength_threshold=strength_threshold,
-        scores=scores if enhanced else None,
     )
     session.insights = insights
 

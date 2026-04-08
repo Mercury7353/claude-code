@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -J evopool_e41_nocd_aime_think
 #SBATCH -A hw-grp
-#SBATCH -p hw-grp
+#SBATCH -p hw-grp,share,preempt
 #SBATCH --gres=gpu:0
 #SBATCH -t 10:00:00
 #SBATCH --mem=64G
@@ -36,7 +36,7 @@ mkdir -p results/e41
 python -u run_experiment.py \
     --condition "evopool_no_codream" \
     --benchmark hard_math_stream \
-    --n_per_domain 30 \
+    --n_per_domain all \
     --pool_size 20 \
     --team_size 3 \
     --backbone_llm "qwen3-8b" \
