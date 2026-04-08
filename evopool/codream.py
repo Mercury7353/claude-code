@@ -389,7 +389,9 @@ def _phase_crystallize_from_reflections(
                 + (f"Teammate(s) FAILED. Their observations:\n"
                    + "\n".join(peer_material) + "\n\n" if peer_material else "")
                 + "You solved this while some teammates did not. Articulate the KEY STRATEGY "
-                "that made the difference — something reusable for similar problems.\n\n"
+                "that made the difference — a SPECIFIC technique, formula, or procedure.\n"
+                "Do NOT give generic advice like 'validate carefully' or 'be systematic'.\n"
+                "Instead: 'When [pattern], use [technique]: [concrete steps]'\n\n"
                 "Classify using FOUR levels:\n"
                 '  - "general": works on ANY task (coding, QA, math, anything)\n'
                 '  - "domain_general": useful for ALL tasks in this broad domain\n'
@@ -417,7 +419,10 @@ def _phase_crystallize_from_reflections(
                 + f"Your reflection: {my_reflection.content}\n\n"
                 + (f"Peer observations (some may have succeeded):\n"
                    + "\n".join(peer_material) + "\n\n" if peer_material else "")
-                + "What is ONE concrete strategy update from this failure? Name the mistake and fix.\n\n"
+                + "What is ONE concrete strategy you will change after this failure?\n"
+                "Be SPECIFIC: name the exact technique that failed and the replacement.\n"
+                "Do NOT give generic advice like 'be more careful' or 'validate thoroughly'.\n"
+                "Instead: 'When [pattern], do NOT [wrong approach], instead use [specific fix]'\n\n"
                 "Classify using FOUR levels:\n"
                 '  - "general": metacognitive strategy that works on ANY task type\n'
                 '  - "domain_general": useful for ALL tasks in this broad domain\n'
@@ -620,16 +625,17 @@ def _phase_imagine(
             f"Task context: {task_context}\n\n"
             f"Your team's reflections after the task:\n{reflections_text}\n"
             f"{contrast_section}\n"
-            "You are now in a DREAM STATE — free from the constraints of the task.\n"
-            "Propose 1-2 bold ideas or hypotheses sparked by these reflections and your\n"
-            "contrast analysis. Ground at least one idea in what you observed about the\n"
-            "performance gap (if any).\n\n"
-            "Good ideas are:\n"
-            "- 'What if we decomposed this differently...'\n"
-            "- 'I wonder if combining X and Y approaches would...'\n"
-            "- 'The contrast suggests trying Z, but extended to...'\n"
-            "- 'A completely different strategy could be...'\n\n"
-            "Be imaginative. Speculate. These are hypotheses, not commitments.\n"
+            "Based on the reflections and contrast analysis, propose 1-2 CONCRETE "
+            "technique improvements you want to try on future similar problems.\n\n"
+            "Requirements:\n"
+            "- Each idea must name a SPECIFIC mathematical technique, algorithm, or approach\n"
+            "- Must explain WHEN to use it (what problem pattern)\n"
+            "- Must explain HOW to apply it (concrete steps)\n"
+            "- Do NOT propose vague ideas like 'be more systematic' or 'validate better'\n\n"
+            "Good examples:\n"
+            "- 'For problems with nested absolute values, expand cases by sign regions'\n"
+            "- 'When a combinatorics problem involves circular arrangements, fix one element'\n"
+            "- 'The contrast shows the winner used generating functions instead of direct counting'\n\n"
             "Respond with JSON:\n"
             "{\n"
             '  "ideas": [\n'
@@ -827,18 +833,21 @@ def _phase_crystallize(
             f"Your current skill profile: {agent.profile.skill_memory}\n\n"
             f"Task context: {task_context}\n\n"
             f"Ideas and exchanges from your team's dream session:\n{material_text}\n\n"
-            "You are crystallizing your private takeaway from this dream session.\n"
-            "What is ONE novel insight you are taking away?\n"
-            "This should be something you DID NOT know before — a new hypothesis,\n"
-            "a new technique, a new belief, or a new approach.\n\n"
-            "Also: which of your skill areas does this update? By how much? (−0.1 to +0.2)\n"
-            "And: what new hypothesis will you test in future tasks?\n\n"
+            "Crystallize ONE concrete, actionable insight from this session.\n\n"
+            "REQUIREMENTS for the insight:\n"
+            "- Must be a SPECIFIC technique, formula, or step-by-step procedure\n"
+            "- Must include WHEN to apply it (what problem pattern triggers it)\n"
+            "- Must NOT be generic advice like 'validate carefully' or 'ensure robustness'\n"
+            "- Good example: 'When a problem involves modular arithmetic with prime p, "
+            "try Fermat's Little Theorem: a^(p-1) ≡ 1 (mod p) to simplify exponents'\n"
+            "- Bad example: 'Ensure holistic validation across the computation chain'\n\n"
+            "Also: which skill area does this update? By how much? (−0.1 to +0.2)\n\n"
             "Respond with JSON:\n"
             "{\n"
-            '  "insight": "...",\n'
+            '  "insight": "When [specific pattern], use [specific technique]: [concrete steps]",\n'
             '  "affected_domains": ["domain1"],\n'
             '  "skill_updates": {"domain1": 0.05, "domain2": -0.02},\n'
-            '  "new_hypotheses": ["hypothesis1", "hypothesis2"]\n'
+            '  "new_hypotheses": ["hypothesis1"]\n'
             "}"
         )
         try:
