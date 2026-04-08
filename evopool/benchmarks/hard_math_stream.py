@@ -241,14 +241,46 @@ class HardMathEvaluator:
         if norm(pred) == norm(expected):
             return 1.0
 
-        # Numeric comparison
-        try:
-            import sympy
-            p_val = float(sympy.sympify(pred.replace("\\", "").replace("{", "(").replace("}", ")")))
-            e_val = float(sympy.sympify(expected.replace("\\", "").replace("{", "(").replace("}", ")")))
+        # LaTeX-aware normalization: \frac{a}{b} → a/b, \sqrt{x} → sqrt(x)
+        def latex_to_expr(s):
+            s = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"(\1)/(\2)", s)
+            s = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", s)
+            s = re.sub(r"\\pi\b", "pi", s)
+            s = re.sub(r"\\cdot", "*", s)
+            s = s.replace("\\left", "").replace("\\right", "")
+            s = s.replace("{", "(").replace("}", ")")
+            s = re.sub(r"\s+", "", s)
+            return s
+
+        if norm(latex_to_expr(pred)) == norm(latex_to_expr(expected)):
+            return 1.0
+
+        # Numeric comparison (no sympy dependency)
+        def _try_eval(s):
+            """Try to evaluate a math expression to a float."""
+            import math
+            s = latex_to_expr(s)
+            s = s.replace("^", "**")
+            # Insert * for implicit multiplication: 2pi → 2*pi, 3sqrt → 3*sqrt
+            s = re.sub(r"(\d)([a-zA-Z])", r"\1*\2", s)
+            s = re.sub(r"(\))(\()", r"\1*\2", s)
+            s = re.sub(r"(\d)(\()", r"\1*\2", s)
+            # Replace common math constants/functions
+            ns = {"pi": math.pi, "sqrt": math.sqrt, "e": math.e,
+                  "sin": math.sin, "cos": math.cos, "tan": math.tan,
+                  "log": math.log, "ln": math.log}
+            try:
+                return float(eval(s, {"__builtins__": {}}, ns))
+            except Exception:
+                return None
+
+        p_val = _try_eval(pred)
+        e_val = _try_eval(expected)
+        if p_val is not None and e_val is not None:
             if abs(p_val - e_val) < 1e-6:
                 return 1.0
-        except Exception:
-            pass
+            # Relative tolerance for large numbers
+            if e_val != 0 and abs(p_val - e_val) / abs(e_val) < 1e-6:
+                return 1.0
 
         return 0.0

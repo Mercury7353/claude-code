@@ -250,7 +250,8 @@ class Agent:
         system_prompt = self.build_system_prompt()
         domain = task.get("domain", "")
         task_type = task.get("type", "")
-        is_code_task = domain in ("mbpp", "humaneval") or task_type in (
+        is_io_code = domain == "code_contests"  # stdin/stdout programs, NOT function-based
+        is_code_task = domain in ("mbpp", "humaneval", "code_contests") or task_type in (
             "code_generation", "code_completion"
         )
         is_math_task = domain in ("gsm8k", "math", "math_hard") or domain.startswith("aime_") or task_type in (
@@ -264,12 +265,19 @@ class Agent:
         # Override system prompt for code tasks: profile persona is too generic for coding
         if is_code_task and not is_review:
             system_prompt = "You are an expert Python programmer. Write clean, correct, and efficient code."
-        if is_code_task and not is_review:
+        if is_code_task and not is_review and not is_io_code:
             subtask_prompt = (
                 subtask_prompt
                 + "\n\nIMPORTANT: Output ONLY the complete Python function implementation "
                 "in a markdown code block (```python ... ```) with no explanation outside the block. "
                 "Use the EXACT function name shown in the test cases or function signature."
+            )
+        elif is_io_code and not is_review:
+            subtask_prompt = (
+                subtask_prompt
+                + "\n\nIMPORTANT: Output ONLY a complete Python program that reads from stdin "
+                "and prints to stdout, in a markdown code block (```python ... ```). "
+                "No explanation outside the block."
             )
         elif is_math_task and not is_review:
             if domain == "gsm8k" or task_type == "math_word_problem":
@@ -345,7 +353,7 @@ class Agent:
         user_prompt = task.get("prompt", task.get("question", str(task)))
         domain = task.get("domain", "")
         task_type = task.get("type", "")
-        is_code = domain in ("mbpp", "humaneval") or task_type in ("code_generation", "code_completion")
+        is_code = domain in ("mbpp", "humaneval", "code_contests") or task_type in ("code_generation", "code_completion")
         is_hard_math = (
             task_type in ("aime_problem", "math_competition_hard")
             or domain.startswith("aime_") or domain == "math_hard"

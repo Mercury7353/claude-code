@@ -400,6 +400,10 @@ class TeamLeader:
             s = _re.sub(r"[{}$\s,^]", "", s)
             # Remove trailing zeros: 0.750 -> 0.75
             s = _re.sub(r"(\.\d*?)0+$", r"\1", s).rstrip(".")
+            # Implicit multiplication: 2pi → 2*pi, 3sqrt → 3*sqrt
+            s = _re.sub(r"(\d)([a-zA-Z])", r"\1*\2", s)
+            s = _re.sub(r"(\))(\()", r"\1*\2", s)
+            s = _re.sub(r"(\d)(\()", r"\1*\2", s)
             # Numeric canonicalization
             try:
                 import math as _math
@@ -1096,7 +1100,7 @@ class TeamLeader:
             if test_cases and isinstance(test_cases[0], (list, tuple)) and len(test_cases[0]) == 2:
                 import subprocess as _sp
                 passed = 0
-                n_tests = min(len(test_cases), 5)
+                n_tests = min(len(test_cases), 10)
                 for inp, expected in test_cases[:n_tests]:
                     try:
                         r = _sp.run(
@@ -1249,10 +1253,12 @@ class TeamLeader:
                         error_section = "\nExecution errors:\n" + "\n---\n".join(error_msgs[:2]) + "\n"
                     _ep_line = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" if entry_point else ""
                     _fix_type = "Python program (reads stdin, prints stdout)" if _is_io else "Python function"
+                    _prompt_limit = 1500 if _is_io else 400
+                    _code_limit = 2000 if _is_io else 800
                     fix_prompt = (
-                        f"Task: {task.get('prompt', '')[:400]}\n"
+                        f"Task: {task.get('prompt', '')[:_prompt_limit]}\n"
                         f"{_ep_line}"
-                        f"The following code is incorrect:\n```python\n{current_code[:800]}\n```\n"
+                        f"The following code is incorrect:\n```python\n{current_code[:_code_limit]}\n```\n"
                         f"{error_section}\n"
                         f"Fix all bugs and produce the complete, correct {_fix_type}. "
                         "Output ONLY a markdown code block: ```python\n...\n```"
@@ -1278,7 +1284,7 @@ class TeamLeader:
         # Return current_code_resp (may be partially improved by fix passes)
         # vs best_code_resp (original best from 3-agent voting before fix passes).
         # If fix pass improved the score (even partially), current_code_resp is better.
-        if best_score < 1.0 and entry_point:
+        if best_score < 1.0:
             return current_code_resp
         return best_code_resp
 
