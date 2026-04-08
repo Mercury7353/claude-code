@@ -323,8 +323,8 @@ class Agent:
             max_tokens=effective_max_tokens,
             enable_thinking=is_hard_math,
         )
-        # Retry with thinking disabled if response was truncated (no \boxed{})
-        if is_hard_math and "\\boxed" not in response and "<think>" in response:
+        # Retry with thinking disabled if response has no \boxed{} and no clear answer
+        if is_hard_math and "\\boxed" not in response and "answer is" not in response.lower():
             response = llm_call(
                 model=backbone_llm,
                 system=system_prompt,
@@ -390,8 +390,8 @@ class Agent:
             temperature=temperature,
             enable_thinking=is_hard_math,
         )
-        # Retry with thinking disabled if response was truncated (no \boxed{} or answer)
-        if is_hard_math and "\\boxed" not in response and "answer is" not in response.lower() and "<think>" in response:
+        # Retry with thinking disabled if response has no \boxed{} and no clear answer
+        if is_hard_math and "\\boxed" not in response and "answer is" not in response.lower():
             response = llm_call(
                 model=backbone_llm,
                 system=system_prompt,
