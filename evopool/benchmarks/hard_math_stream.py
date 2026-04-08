@@ -232,10 +232,12 @@ class HardMathEvaluator:
         if pred == expected:
             return 1.0
 
-        # Normalize: remove spaces, $ signs, currency/unit markers, degree symbols
+        # Normalize: remove spaces, $ signs, currency/unit markers, degree symbols, unit text
         def norm(s):
             s = s.replace("\\$", "").replace("\\%", "").replace("^\\circ", "")
             s = s.replace("\\circ", "").replace("\\degree", "")
+            # Remove \mbox{...}, \text{...}, \mathrm{...} unit annotations and trailing ^N
+            s = re.sub(r"\\(?:mbox|text|mathrm)\s*\{[^}]*\}\s*(\^[0-9{}]*)?", "", s)
             return re.sub(r"\s+", "", s).replace("$", "").replace(",", "").replace("\\!", "")
 
         if norm(pred) == norm(expected):
@@ -243,6 +245,8 @@ class HardMathEvaluator:
 
         # LaTeX-aware normalization: \frac{a}{b} → a/b, \sqrt{x} → sqrt(x)
         def latex_to_expr(s):
+            # Handle \frac XY (single digit, no braces) before the braced version
+            s = re.sub(r"\\frac\s+(\d)\s*(\d)", r"(\1)/(\2)", s)
             s = re.sub(r"\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"(\1)/(\2)", s)
             s = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", s)
             s = re.sub(r"\\pi\b", "pi", s)
