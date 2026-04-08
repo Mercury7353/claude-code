@@ -223,9 +223,11 @@ class HardMathEvaluator:
         if pred == expected:
             return 1.0
 
-        # Normalize: remove spaces, $ signs
+        # Normalize: remove spaces, $ signs, currency/unit markers, degree symbols
         def norm(s):
-            return re.sub(r"\s+", "", s).replace("$", "").replace(",", "")
+            s = s.replace("\\$", "").replace("\\%", "").replace("^\\circ", "")
+            s = s.replace("\\circ", "").replace("\\degree", "")
+            return re.sub(r"\s+", "", s).replace("$", "").replace(",", "").replace("\\!", "")
 
         if norm(pred) == norm(expected):
             return 1.0

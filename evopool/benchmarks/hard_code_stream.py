@@ -146,10 +146,17 @@ def _extract_entry_point(code: str, test_list: list) -> str:
     m = re.search(r"def\s+(\w+)\s*\(", code)
     if m:
         return m.group(1)
+    _builtin_names = {"math", "isinstance", "type", "len", "all", "any", "int", "float", "str", "list", "tuple", "set", "dict"}
     for tc in test_list:
-        m = re.search(r"assert\s+(\w+)\s*\(", str(tc))
-        if m:
+        tc_str = str(tc)
+        # First try: direct assert fn_name(...)
+        m = re.search(r"assert\s+(\w+)\s*\(", tc_str)
+        if m and m.group(1) not in _builtin_names:
             return m.group(1)
+        # Second try: handles math.isclose(fn_name(...), ...) pattern
+        m2 = re.search(r"assert\s+\w+\.\w+\((\w+)\s*\(", tc_str)
+        if m2:
+            return m2.group(1)
     return ""
 
 

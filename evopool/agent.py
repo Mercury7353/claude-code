@@ -9,7 +9,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 from .llm import llm_call
 
@@ -30,6 +30,8 @@ class Experience:
 @dataclass
 class AgentProfile:
     """Structured agent profile. This is the evolving identity of an agent."""
+
+    _DOMAIN_CATEGORY_CACHE: ClassVar[dict[str, str]] = {}
 
     persona: str  # Evolving description of agent's identity, style, specialization
     skill_memory: dict[str, float]  # domain -> confidence score [0, 1]
@@ -124,20 +126,55 @@ class AgentProfile:
             parts.append("Strategies: " + "; ".join(e.strategy_summary[:60] for e in good_exps))
         return ". ".join(parts) if parts else self.persona
 
+    @staticmethod
+    def _domain_category(domain: str) -> str:
+        """Map a specific domain to its broader category for cross-domain matching.
+
+        Without this, math_hard experiences can't transfer to AIME tasks
+        because neither domain nor task_type match.
+        """
+        if domain in AgentProfile._DOMAIN_CATEGORY_CACHE:
+            return AgentProfile._DOMAIN_CATEGORY_CACHE[domain]
+        # Math domains
+        if domain in ("math_hard", "math", "gsm8k") or domain.startswith("aime_"):
+            cat = "math"
+        # Code domains
+        elif domain in ("mbpp", "humaneval", "code_contests"):
+            cat = "code"
+        else:
+            cat = domain
+        AgentProfile._DOMAIN_CATEGORY_CACHE[domain] = cat
+        return cat
+
     def get_relevant_experiences(self, task: dict, max_k: int = 3) -> list[Experience]:
-        """Retrieve top-k relevant experiences for a task (same domain, highest weight)."""
+        """Retrieve top-k relevant experiences for a task.
+
+        Matches by: exact domain > same category > same task_type.
+        This allows math_hard experiences to transfer to AIME tasks.
+        """
         domain = task.get("domain", "")
         task_type = task.get("type", "")
-        # Match by domain first, then by task_type
-        relevant = [
-            e for e in self.experience_buffer
-            if e.domain == domain or e.task_type == task_type
-        ]
-        if not relevant:
+        category = self._domain_category(domain)
+
+        scored: list[tuple[float, Experience]] = []
+        for e in self.experience_buffer:
+            if e.domain == domain:
+                # Exact domain match (highest priority)
+                priority = 2.0
+            elif self._domain_category(e.domain) == category:
+                # Same category (e.g., math_hard → aime)
+                priority = 1.0
+            elif e.task_type == task_type:
+                # Same task type
+                priority = 0.5
+            else:
+                continue
+            scored.append((priority + e.relevance_weight, e))
+
+        if not scored:
             return []
-        # Sort by relevance_weight desc, then recency (later = more recent)
-        relevant.sort(key=lambda e: (-e.relevance_weight,))
-        return relevant[:max_k]
+        scored.sort(key=lambda x: -x[0])
+        return [e for _, e in scored[:max_k]]
 
     def format_experience_hint(self, task: dict) -> str:
         """Format relevant experiences as a short user-prompt injection (<100 tokens)."""
@@ -254,8 +291,8 @@ class Agent:
                 + "\n\nProvide a concise, direct answer. Do not repeat the question."
             )
         # Inject domain_general insights (L2.5): useful for ALL tasks in this broad domain.
-        # Higher-priority than subdomain hints; injected for code tasks too (safe meta-strategies).
-        if not is_review:
+        # Skip for code tasks — format-sensitive, domain hints add noise to code generation.
+        if not is_code_task and not is_review:
             domain_hint = _get_domain_hint(self.profile, task)
             if domain_hint:
                 subtask_prompt = domain_hint + "\n\n" + subtask_prompt
@@ -278,7 +315,7 @@ class Agent:
         user_prompt = subtask_prompt
         if context:
             user_prompt = f"Context from teammates:\n{context}\n\n---\nYour task:\n{subtask_prompt}"
-        effective_max_tokens = max(max_tokens, 4096) if is_hard_math else max_tokens
+        effective_max_tokens = max(max_tokens, 7000) if is_hard_math else max_tokens
         response = llm_call(
             model=backbone_llm,
             system=system_prompt,
@@ -286,6 +323,15 @@ class Agent:
             max_tokens=effective_max_tokens,
             enable_thinking=is_hard_math,
         )
+        # Retry with thinking disabled if response was truncated (no \boxed{})
+        if is_hard_math and "\\boxed" not in response and "<think>" in response:
+            response = llm_call(
+                model=backbone_llm,
+                system=system_prompt,
+                user=user_prompt + "\n\nBe concise. Go directly to the answer.",
+                max_tokens=effective_max_tokens,
+                enable_thinking=False,
+            )
         return {"agent_id": self.agent_id, "response": response, "task_type": task.get("type", "unknown")}
 
     def execute_task(self, task: dict, backbone_llm: str, temperature: float = 0.7,
@@ -330,7 +376,7 @@ class Agent:
 
         # Token budgets
         if is_hard_math:
-            max_tokens = 4096
+            max_tokens = 7000
         elif domain in ("gsm8k", "math") or task_type in ("math_word_problem", "math_competition", "arithmetic"):
             max_tokens = 1024
         else:
@@ -344,6 +390,16 @@ class Agent:
             temperature=temperature,
             enable_thinking=is_hard_math,
         )
+        # Retry with thinking disabled if response was truncated (no \boxed{} or answer)
+        if is_hard_math and "\\boxed" not in response and "answer is" not in response.lower() and "<think>" in response:
+            response = llm_call(
+                model=backbone_llm,
+                system=system_prompt,
+                user=user_prompt + "\n\nBe concise. Go directly to the answer.",
+                max_tokens=max_tokens,
+                temperature=temperature,
+                enable_thinking=False,
+            )
         return {"agent_id": self.agent_id, "response": response, "task_type": task_type}
 
     # ------------------------------------------------------------------

@@ -260,20 +260,45 @@ class TeamLeader:
         entry_point = task.get("entry_point") or ""
         if not entry_point:
             for tc in (task.get("test_cases") or []):
-                _m = _re.search(r"assert\s+(\w+)\s*\(", str(tc))
-                if _m:
+                tc_str = str(tc)
+                # First try: direct assert fn_name(...)
+                _m = _re.search(r"assert\s+(\w+)\s*\(", tc_str)
+                if _m and _m.group(1) not in ("math", "isinstance", "type", "len", "all", "any"):
                     entry_point = _m.group(1)
+                    break
+                # Second try: handles math.isclose(fn_name(...), ...) pattern
+                _m2 = _re.search(r"assert\s+\w+\.\w+\((\w+)\s*\(", tc_str)
+                if _m2:
+                    entry_point = _m2.group(1)
                     break
 
         # Build the code generation prompt
         subtask_prompt = task.get("prompt", str(task))
+        test_cases_raw = task.get("test_cases") or task.get("tests") or []
+        is_stdin_stdout = domain in ("code_contests",) or (not entry_point and test_cases_raw and isinstance(test_cases_raw[0], (list, tuple)))
         if entry_point:
             subtask_prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + subtask_prompt
-        # Instruct model to return code only (prevents extended thinking, matches AFlow behavior)
-        subtask_prompt += (
-            "\n\nReturn ONLY the complete, runnable Python code without explanations. "
-            "Write the function directly."
-        )
+        # Include test cases as hints (critical for correct signatures, imports, return types)
+        if test_cases_raw and not is_stdin_stdout:
+            subtask_prompt += "\n\nTest cases (sample):\n" + "\n".join(
+                str(tc)[:500] for tc in test_cases_raw[:3]
+            )
+        elif test_cases_raw and is_stdin_stdout:
+            # Show I/O examples for stdin/stdout problems
+            examples = []
+            for inp, out in test_cases_raw[:2]:
+                examples.append(f"Input:\n{str(inp)[:300]}\nExpected Output:\n{str(out)[:300]}")
+            subtask_prompt += "\n\nExample I/O:\n" + "\n---\n".join(examples)
+        if is_stdin_stdout:
+            subtask_prompt += (
+                "\n\nWrite a complete Python program that reads from stdin and "
+                "prints to stdout. Output ONLY the code in a markdown code block."
+            )
+        else:
+            subtask_prompt += (
+                "\n\nOutput ONLY the complete Python function implementation "
+                "in a markdown code block. Include necessary imports."
+            )
 
         # All agents generate code independently (no shared context)
         # Use 2048 max_tokens: Qwen3 thinking can use ~1000 tokens, leaving enough for code
@@ -738,10 +763,17 @@ class TeamLeader:
             if not ep:
                 # Try to extract from test cases
                 test_cases = task.get("test_cases", []) or []
+                _builtin_names = {"math", "isinstance", "type", "len", "all", "any", "int", "float", "str", "list", "tuple", "set", "dict"}
                 for tc in test_cases:
-                    m = _re.search(r"assert\s+(\w+)\(", str(tc))
-                    if m:
+                    tc_str = str(tc)
+                    m = _re.search(r"assert\s+(\w+)\s*\(", tc_str)
+                    if m and m.group(1) not in _builtin_names:
                         ep = m.group(1)
+                        break
+                    # Handle math.isclose(fn_name(...), ...) pattern
+                    m2 = _re.search(r"assert\s+\w+\.\w+\((\w+)\s*\(", tc_str)
+                    if m2:
+                        ep = m2.group(1)
                         break
                 if not ep:
                     # Try from test string (HumanEval format)
@@ -1041,6 +1073,22 @@ class TeamLeader:
                 except Exception:
                     _signal.alarm(0)
                     return 0.0
+            # code_contests: stdin/stdout evaluation via subprocess
+            if test_cases and isinstance(test_cases[0], (list, tuple)) and len(test_cases[0]) == 2:
+                import subprocess as _sp
+                passed = 0
+                n_tests = min(len(test_cases), 5)
+                for inp, expected in test_cases[:n_tests]:
+                    try:
+                        r = _sp.run(
+                            ["python3", "-c", code],
+                            input=str(inp), capture_output=True, text=True, timeout=5,
+                        )
+                        if r.stdout.strip() == str(expected).strip():
+                            passed += 1
+                    except Exception:
+                        pass
+                return passed / n_tests if n_tests > 0 else 0.5
             # MBPP: run assert statements
             if test_cases:
                 passed = 0
@@ -1067,11 +1115,16 @@ class TeamLeader:
 
         entry_point = task.get("entry_point") or ""
         if not entry_point:
-            # MBPP: entry_point is None in task dict; extract from test_cases
+            _builtins = {"math", "isinstance", "type", "len", "all", "any"}
             for tc in (task.get("test_cases") or []):
-                _m = _re.search(r"assert\s+(\w+)\s*\(", str(tc))
-                if _m:
+                tc_str = str(tc)
+                _m = _re.search(r"assert\s+(\w+)\s*\(", tc_str)
+                if _m and _m.group(1) not in _builtins:
                     entry_point = _m.group(1)
+                    break
+                _m2 = _re.search(r"assert\s+\w+\.\w+\((\w+)\s*\(", tc_str)
+                if _m2:
+                    entry_point = _m2.group(1)
                     break
         candidates = []
         for r in all_results:
@@ -1105,7 +1158,7 @@ class TeamLeader:
         best_score, _, _, best_code_resp = candidates[0]
 
         # If best code doesn't pass all tests, attempt up to 3 LLM fix passes with execution feedback
-        if best_score < 1.0 and entry_point:
+        if best_score < 1.0:
             current_code_resp = best_code_resp
             current_score = best_score
             for _fix_attempt in range(3):
@@ -1114,21 +1167,42 @@ class TeamLeader:
                     # Collect error messages from failing test cases for execution feedback
                     error_msgs = []
                     import sys as _sys, traceback as _traceback
-                    for tc in (task.get("test_cases") or [])[:3]:
-                        try:
-                            import signal as _sig2
-                            _sig2.signal(_sig2.SIGALRM, _timeout_handler)
-                            _sig2.alarm(3)  # 3s timeout to prevent infinite loops
-                            _g = {}
-                            exec(current_code, _g)
-                            exec(tc, _g)
-                            _sig2.alarm(0)
-                        except Exception as _e:
-                            _sig2.alarm(0)
-                            _tb = _traceback.format_exc().splitlines()[-3:]
-                            error_msgs.append(f"Test: {str(tc)[:100]}\nError: {str(_e)[:200]}\n{''.join(_tb)[:200]}")
-                            if len(error_msgs) >= 2:
-                                break
+                    _tc_list = (task.get("test_cases") or [])[:3]
+                    _is_io = _tc_list and isinstance(_tc_list[0], (list, tuple)) and len(_tc_list[0]) == 2
+                    if _is_io:
+                        # code_contests: stdin/stdout tests
+                        import subprocess as _sp2
+                        for inp, expected in _tc_list[:2]:
+                            try:
+                                r = _sp2.run(
+                                    ["python3", "-c", current_code],
+                                    input=str(inp), capture_output=True, text=True, timeout=5,
+                                )
+                                if r.stdout.strip() != str(expected).strip():
+                                    got = r.stdout.strip()[:200] if r.stdout else "(no output)"
+                                    err = r.stderr.strip()[:200] if r.stderr else ""
+                                    error_msgs.append(
+                                        f"Input: {str(inp)[:100]}\nExpected: {str(expected)[:100]}\n"
+                                        f"Got: {got}\n{f'Stderr: {err}' if err else ''}"
+                                    )
+                            except Exception as _e:
+                                error_msgs.append(f"Input: {str(inp)[:100]}\nError: {str(_e)[:200]}")
+                    else:
+                        for tc in _tc_list:
+                            try:
+                                import signal as _sig2
+                                _sig2.signal(_sig2.SIGALRM, _timeout_handler)
+                                _sig2.alarm(3)  # 3s timeout to prevent infinite loops
+                                _g = {}
+                                exec(current_code, _g)
+                                exec(tc, _g)
+                                _sig2.alarm(0)
+                            except Exception as _e:
+                                _sig2.alarm(0)
+                                _tb = _traceback.format_exc().splitlines()[-3:]
+                                error_msgs.append(f"Test: {str(tc)[:100]}\nError: {str(_e)[:200]}\n{''.join(_tb)[:200]}")
+                                if len(error_msgs) >= 2:
+                                    break
                     # HumanEval: test_cases is empty; use check() for error feedback
                     test_str = task.get("test", "")
                     if not error_msgs and test_str and entry_point:
@@ -1154,12 +1228,14 @@ class TeamLeader:
                     error_section = ""
                     if error_msgs:
                         error_section = "\nExecution errors:\n" + "\n---\n".join(error_msgs[:2]) + "\n"
+                    _ep_line = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" if entry_point else ""
+                    _fix_type = "Python program (reads stdin, prints stdout)" if _is_io else "Python function"
                     fix_prompt = (
                         f"Task: {task.get('prompt', '')[:400]}\n"
-                        f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n"
+                        f"{_ep_line}"
                         f"The following code is incorrect:\n```python\n{current_code[:800]}\n```\n"
                         f"{error_section}\n"
-                        "Fix all bugs and produce the complete, correct Python function. "
+                        f"Fix all bugs and produce the complete, correct {_fix_type}. "
                         "Output ONLY a markdown code block: ```python\n...\n```"
                     )
                     fixed_raw = llm_call(
