@@ -253,8 +253,8 @@ class Agent:
         is_code_task = domain in ("mbpp", "humaneval") or task_type in (
             "code_generation", "code_completion"
         )
-        is_math_task = domain in ("gsm8k", "math") or task_type in (
-            "math_word_problem", "math_competition", "arithmetic"
+        is_math_task = domain in ("gsm8k", "math", "math_hard") or domain.startswith("aime_") or task_type in (
+            "math_word_problem", "math_competition", "arithmetic", "math_competition_hard", "aime_problem"
         )
         is_qa_task = domain in ("hotpotqa", "drop") or task_type in (
             "multi_hop_qa", "reading_comprehension"
@@ -485,11 +485,7 @@ class Agent:
             # Cap buffer per domain (keep most recent + highest weight)
             self._trim_experience_buffer()
         except Exception:
-            # Fallback: store minimal experience without LLM
-            self.profile.experience_buffer.append(Experience(
-                task_id=task_id, domain=domain, task_type=task_type, score=score,
-                strategy_summary="(no summary)", lesson="(no lesson)", source="self",
-            ))
+            pass  # Skip storing experience if LLM summary fails — avoids poisoning
 
     def _trim_experience_buffer(self) -> None:
         """Keep buffer within limit, prioritizing recent + high-weight entries."""
