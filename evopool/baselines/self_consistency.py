@@ -58,7 +58,7 @@ class SelfConsistencyPool:
                 hint += f"\n\n[REQUIRED FUNCTION NAME: {entry_point}]"
             test_cases = task.get("test_cases", [])
             if test_cases:
-                hint += "\n\nTest cases:\n" + "\n".join(str(tc) for tc in test_cases[:3])
+                hint += "\n\nTest cases (sample):\n" + "\n".join(str(tc)[:500] for tc in test_cases[:3])
             user = (
                 base_prompt + hint
                 + "\n\nIMPORTANT: Output ONLY the complete Python function implementation "

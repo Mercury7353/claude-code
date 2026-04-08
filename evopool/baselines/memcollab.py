@@ -82,7 +82,7 @@ class MemCollabPool:
                 task_prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + task_prompt
             test_cases = task.get("test_cases", [])
             if test_cases:
-                task_prompt += "\n\nTest cases:\n" + "\n".join(str(tc) for tc in test_cases[:3])
+                task_prompt += "\n\nTest cases (sample):\n" + "\n".join(str(tc)[:500] for tc in test_cases[:3])
 
         is_hard_math = (
             task.get("type") in ("aime_problem", "math_competition_hard")

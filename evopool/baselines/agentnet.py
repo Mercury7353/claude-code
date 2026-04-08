@@ -191,7 +191,7 @@ class AgentNetPool:
                 task_prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + task_prompt
             test_cases = task.get("test_cases", [])
             if test_cases:
-                task_prompt += "\n\nTest cases:\n" + "\n".join(str(tc) for tc in test_cases[:3])
+                task_prompt += "\n\nTest cases (sample):\n" + "\n".join(str(tc)[:500] for tc in test_cases[:3])
 
         # Select team based on memory relevance (AgentNet's topology)
         def memory_score(agent) -> float:

@@ -98,7 +98,7 @@ class DyLANPool:
                 prompt = f"[REQUIRED FUNCTION NAME: {entry_point}]\n\n" + prompt
             test_cases = task.get("test_cases", [])
             if test_cases:
-                prompt += "\n\nTest cases:\n" + "\n".join(str(tc) for tc in test_cases[:3])
+                prompt += "\n\nTest cases (sample):\n" + "\n".join(str(tc)[:500] for tc in test_cases[:3])
         return prompt
 
     def process_task(self, task: dict, evaluator) -> dict:
