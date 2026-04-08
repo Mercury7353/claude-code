@@ -177,34 +177,39 @@ class HardMathEvaluator:
         def _check(pred: str) -> bool:
             return pred.lstrip("0") == expected.lstrip("0") or pred == expected
 
-        # Strategy 1: explicit "The answer is: X" or "answer is X"
-        # Use last match to avoid false positives from incidental "answer: N" in reasoning
-        for pat in [
-            r"[Tt]he\s+answer\s+is:?\s*(\d+)",
-            r"[Ff]inal\s+answer:?\s*(\d+)",
-        ]:
+        # Collect all candidate answers, check each — don't early-exit on wrong match
+        candidates = []
+
+        # Strategy 1: explicit "The answer is: X" or "Final answer: X" (high confidence)
+        for pat in [r"[Tt]he\s+answer\s+is:?\s*(\d+)", r"[Ff]inal\s+answer:?\s*(\d+)"]:
             matches = re.findall(pat, response)
-            if matches and _check(matches[-1]):
-                return 1.0
             if matches:
-                return 0.0
-        # Weaker pattern: bare "answer: N" — only check in last 300 chars to avoid reasoning text
-        m = re.search(r"[Aa]nswer:?\s*(\d+)", response[-300:])
-        if m and _check(m.group(1)):
-            return 1.0
+                candidates.append(("explicit", matches[-1]))
 
         # Strategy 2: \boxed{integer}
         boxed = re.findall(r"\\boxed\{(\d{1,3})\}", response)
-        if boxed and _check(boxed[-1]):
-            return 1.0
         if boxed:
-            return 0.0
+            candidates.append(("boxed", boxed[-1]))
 
-        # Strategy 3: last 1-3 digit integer in the final portion of response
+        # Strategy 3: bare "answer: N" in last 300 chars
+        m = re.search(r"[Aa]nswer:?\s*(\d+)", response[-300:])
+        if m:
+            candidates.append(("bare", m.group(1)))
+
+        # Strategy 4: last 1-3 digit integer in tail
         tail = response[-600:]
         nums = re.findall(r"\b(\d{1,3})\b", tail)
-        if nums and _check(nums[-1]):
-            return 1.0
+        if nums:
+            candidates.append(("tail", nums[-1]))
+
+        # Check candidates in priority order — return 1.0 if ANY matches
+        for _, pred in candidates:
+            if _check(pred):
+                return 1.0
+
+        # If we had candidates but none matched, return 0.0
+        if candidates:
+            return 0.0
         if nums:
             return 0.0
         return 0.0

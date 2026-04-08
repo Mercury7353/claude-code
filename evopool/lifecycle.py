@@ -46,9 +46,9 @@ SPECIALIZE_MIN_SCORE = 0.75        # Mean score threshold for specialization
 FORK_DIVERGENCE_TASKS = 8          # Need N tasks before considering fork (raised: more stable signal)
 FORK_DIVERGENCE_THRESHOLD = 0.55   # Task type distribution entropy threshold (raised: less eager forking)
 FORK_DOMAIN_COOLDOWN = 3           # Suppress fork if current task type only appeared in last N tasks
-MERGE_SIMILARITY_THRESHOLD = 0.90  # Profile cosine similarity for merge
+MERGE_SIMILARITY_THRESHOLD = 0.95  # Profile cosine similarity for merge (raised: preserve diversity on hard tasks)
 MERGE_MIN_TASKS = 10               # Both agents need this many tasks
-PRUNE_UNDERPERFORMANCE_TASKS = 5   # Consecutive underperformance tasks
+PRUNE_UNDERPERFORMANCE_TASKS = 10  # Consecutive underperformance tasks (raised from 5: hard tasks need patience)
 PRUNE_UNDERPERFORMANCE_RATIO = 0.8 # Agent score < this * pool_mean
 GENESIS_COVERAGE_THRESHOLD = 0.4   # If no agent has affinity > this, trigger genesis
 
