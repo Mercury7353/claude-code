@@ -357,8 +357,13 @@ class TeamLeader:
 
         # Extract final answers and vote
         def _extract_final(text: str) -> str:
-            # Try "The answer is: X" (AIME format)
-            m_aime = _re.search(r"[Tt]he answer is:?\s*(\d+)", text)
+            # Try "The answer is: X" or "Final answer: X" (AIME format) — use last match
+            for pat in [r"[Tt]he\s+answer\s+is:?\s*(\d+)", r"[Ff]inal\s+answer:?\s*(\d+)"]:
+                matches = _re.findall(pat, text)
+                if matches:
+                    return matches[-1].strip()
+            # Try bare "answer: N" in last 300 chars only
+            m_aime = _re.search(r"[Aa]nswer:?\s*(\d+)", text[-300:])
             if m_aime:
                 return m_aime.group(1).strip()
             # Try \boxed{...}
@@ -381,14 +386,28 @@ class TeamLeader:
             return nums[-1] if nums else ""
 
         def _normalize_ans(s: str) -> str:
-            """Normalize math answer for voting (LaTeX variations → canonical form)."""
-            s = s.strip().lower()
-            # Remove LaTeX commands (frac, sqrt, etc.) and braces
-            s = _re.sub(r"\\[a-zA-Z]+", "", s)
-            s = _re.sub(r"[{}\$\s,]", "", s)
-            # Remove trailing zeros after decimal: 0.750 → 0.75
+            """Normalize math answer for voting."""
+            s = s.strip()
+            # Handle \$ \% \circ before general LaTeX strip
+            s = s.replace("\\$", "").replace("\\%", "")
+            # Convert \frac{A}{B} to A/B before stripping
+            s = _re.sub(r"\\frac\s*\{([^}]*)\}\s*\{([^}]*)\}", r"(\1)/(\2)", s)
+            # Convert \sqrt{X} to sqrt(X)
+            s = _re.sub(r"\\sqrt\s*\{([^}]*)\}", r"sqrt(\1)", s)
+            # Remove remaining LaTeX commands
+            s = _re.sub(r"\\[a-zA-Z!]+", "", s)
+            # Remove braces, dollar, spaces, commas, carets
+            s = _re.sub(r"[{}$\s,^]", "", s)
+            # Remove trailing zeros: 0.750 -> 0.75
             s = _re.sub(r"(\.\d*?)0+$", r"\1", s).rstrip(".")
-            return s
+            # Numeric canonicalization
+            try:
+                import math as _math
+                val = eval(s, {"__builtins__": {}, "sqrt": _math.sqrt, "pi": _math.pi})
+                s = f"{float(val):.10g}"
+            except Exception:
+                pass
+            return s.lower()
 
         answer_votes: dict[str, list[str]] = {}
         for r in results:

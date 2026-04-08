@@ -178,16 +178,20 @@ class HardMathEvaluator:
             return pred.lstrip("0") == expected.lstrip("0") or pred == expected
 
         # Strategy 1: explicit "The answer is: X" or "answer is X"
+        # Use last match to avoid false positives from incidental "answer: N" in reasoning
         for pat in [
-            r"[Tt]he answer is:?\s*(\d+)",
-            r"[Aa]nswer:?\s*(\d+)",
-            r"[Ff]inal answer:?\s*(\d+)",
+            r"[Tt]he\s+answer\s+is:?\s*(\d+)",
+            r"[Ff]inal\s+answer:?\s*(\d+)",
         ]:
-            m = re.search(pat, response)
-            if m and _check(m.group(1)):
+            matches = re.findall(pat, response)
+            if matches and _check(matches[-1]):
                 return 1.0
-            if m:  # found but wrong answer — trust this extraction
+            if matches:
                 return 0.0
+        # Weaker pattern: bare "answer: N" — only check in last 300 chars to avoid reasoning text
+        m = re.search(r"[Aa]nswer:?\s*(\d+)", response[-300:])
+        if m and _check(m.group(1)):
+            return 1.0
 
         # Strategy 2: \boxed{integer}
         boxed = re.findall(r"\\boxed\{(\d{1,3})\}", response)
