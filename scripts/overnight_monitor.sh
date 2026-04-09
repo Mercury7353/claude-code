@@ -1,33 +1,84 @@
 #!/bin/bash
-# Overnight monitoring — polls every 20 min, appends to log
-LOG="/nfs/hpc/share/zhanyaol/claude-code/logs/overnight_monitor.log"
-echo "=== Overnight monitor started $(date) ===" >> "$LOG"
+cd /nfs/hpc/share/zhanyaol/claude-code
+source /nfs/hpc/share/zhanyaol/miniconda3/etc/profile.d/conda.sh
+conda activate tool 2>/dev/null
 
-while true; do
-    bash /nfs/hpc/share/zhanyaol/claude-code/scripts/check_progress.sh 2>/dev/null >> "$LOG"
-    echo "---" >> "$LOG"
+echo ""
+echo "## Check at $(date '+%Y-%m-%d %H:%M PDT')"
+echo ""
 
-    # Check if E40 and all key experiments are done
-    done=$(python3 -c "
+echo "### Running Jobs"
+squeue -u zhanyaol --format="%.10i %.15j %.8T %.10M" 2>/dev/null | head -25
+echo ""
+
+echo "### Hard Math Progress"
+python3 -c "
 import json, os
-files = {
-    'E40': 'results/e40/evopool_full_hard_math_stream_seed42.json',
-    'E41': 'results/e41/evopool_no_codream_hard_math_stream_seed42.json',
-    'E50': 'results/e50/evopool_no_verify_hard_math_stream_seed42.json',
-    'E51': 'results/e51/agentnet_hard_math_stream_seed42.json',
-    'E52': 'results/e52/memcollab_hard_math_stream_seed42.json',
-}
-os.chdir('/nfs/hpc/share/zhanyaol/claude-code')
-all_done = all(os.path.exists(f) and os.path.getsize(f) > 5000 for f in files.values())
-print('YES' if all_done else 'NO')
-" 2>/dev/null)
+experiments = [
+    ('EvoPool', 'results/v2_hardmath'),
+    ('noCoDream', 'results/v2_hardmath_nocd'),
+    ('LeaderLearn', 'results/v2_hardmath_leadlearn'),
+    ('EvoPool_FIXED', 'results/v2_hardmath_fixed'),
+    ('noCoDream_FIXED', 'results/v2_hardmath_nocd_fixed'),
+]
+for name, path in experiments:
+    f = os.path.join(path, '_checkpoint.json')
+    if not os.path.exists(f): continue
+    data = json.load(open(f))
+    tasks = data.get('per_task_results', [])
+    n = len(tasks)
+    if n == 0: continue
+    scores = [t.get('team_score', t.get('score', 0)) for t in tasks]
+    avg = sum(scores)/n
+    domains = {}
+    for t in tasks:
+        d = t.get('domain', '?')
+        if d not in domains: domains[d] = []
+        domains[d].append(t.get('team_score', t.get('score', 0)))
+    domain_str = ', '.join(f'{k}={sum(v)/len(v):.3f}({len(v)})' for k,v in sorted(domains.items()))
+    in_aime = any(d.startswith('aime') for d in domains)
+    done = ' **DONE**' if n >= 360 else ''
+    print(f'- **{name}**: {n}/367, avg={avg:.4f} | {domain_str}{done}')
+    if in_aime:
+        aime_tasks = [t for t in tasks if t.get('domain','').startswith('aime')]
+        aime_scores = [t.get('team_score', t.get('score', 0)) for t in aime_tasks]
+        math_hard = [t for t in tasks if t.get('domain') == 'math_hard']
+        mh_scores = [t.get('team_score', t.get('score', 0)) for t in math_hard]
+        mh_avg = sum(mh_scores)/len(mh_scores) if mh_scores else 0
+        aime_avg = sum(aime_scores)/len(aime_scores)
+        collapse = (mh_avg - aime_avg) / mh_avg * 100 if mh_avg > 0 else 0
+        print(f'  >> AIME: {len(aime_tasks)} tasks, avg={aime_avg:.4f}, collapse={collapse:.1f}%')
+" 2>/dev/null
+echo ""
 
-    if [ "$done" = "YES" ]; then
-        echo "=== All key experiments complete! $(date) ===" >> "$LOG"
-        # Run full analysis
-        python3 scripts/analyze_results.py >> "$LOG" 2>/dev/null
-        break
-    fi
-
-    sleep 1200  # 20 min
-done
+echo "### Hard Code Reruns"
+python3 -c "
+import json, os
+experiments = [
+    ('SA', 'results/v2_hardcode_sa_rerun'),
+    ('AgentNet', 'results/v2_hardcode_agentnet_rerun'),
+    ('MemCollab', 'results/v2_hardcode_memcollab_rerun'),
+    ('EvoMem', 'results/v2_hardcode_evomem_rerun'),
+    ('DyLAN', 'results/v2_hardcode_dylan_rerun'),
+    ('SC', 'results/v2_hardcode_sc_rerun'),
+]
+for name, path in experiments:
+    f = os.path.join(path, '_checkpoint.json')
+    if not os.path.exists(f): continue
+    data = json.load(open(f))
+    tasks = data.get('per_task_results', [])
+    n = len(tasks)
+    if n == 0: continue
+    scores = [t.get('team_score', t.get('score', 0)) for t in tasks]
+    avg = sum(scores)/n
+    domains = {}
+    for t in tasks:
+        d = t.get('domain', '?')
+        if d not in domains: domains[d] = []
+        domains[d].append(t.get('team_score', t.get('score', 0)))
+    domain_str = ', '.join(f'{k}={sum(v)/len(v):.3f}({len(v)})' for k,v in sorted(domains.items()))
+    done = ' **DONE**' if n >= 580 else ''
+    print(f'- **{name}**: {n}/586, avg={avg:.4f} | {domain_str}{done}')
+" 2>/dev/null
+echo ""
+echo "---"
