@@ -101,6 +101,10 @@ class TeamLeader:
         task_type = task.get("type", "general")
         domain = task.get("domain", "")
 
+        # Uniform execution mode: use voting (SC) for ALL tasks, no domain-specific routing
+        if getattr(self, '_uniform_execution', False):
+            return self._run_qa_self_consistency(task)
+
         # Code tasks always use best-of-k (needs test execution, not LLM judgement)
         if task_type in ("code_generation", "code_completion") or domain in ("mbpp", "humaneval"):
             return self._run_code_best_of_k(task)
@@ -1363,6 +1367,7 @@ def run_leader_mas(
     backbone_llm: str,
     max_extra_agents: int = 2,
     critique_enabled: bool = True,
+    uniform_execution: bool = False,
 ) -> MASResult:
     """Select a leader and run the full leader-coordinated task execution."""
     task_type = task.get("type", "general")
@@ -1376,4 +1381,5 @@ def run_leader_mas(
         max_extra_agents=max_extra_agents,
         critique_enabled=critique_enabled,
     )
+    coordinator._uniform_execution = uniform_execution
     return coordinator.run(task)

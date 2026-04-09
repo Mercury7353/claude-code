@@ -57,6 +57,10 @@ def main():
                         help="Comma-separated domain list (default: all 6)")
     parser.add_argument("--shuffle_all", action="store_true",
                         help="Shuffle all tasks across domains (destroys domain ordering)")
+    parser.add_argument("--sc_k", type=int, default=5,
+                        help="Number of samples for self-consistency (default: 5)")
+    parser.add_argument("--uniform_execution", action="store_true",
+                        help="Use SC for ALL task types (no domain-specific BoK/leader-worker)")
     parser.add_argument("--save_pool", type=str, default=None,
                         help="Path to save final pool state (EvoPool only)")
     parser.add_argument("--load_pool", type=str, default=None,
@@ -298,7 +302,7 @@ def _build_system(args):
     if condition == "self_consistency":
         from evopool.baselines.self_consistency import SelfConsistencyPool
         return SelfConsistencyPool(
-            k=5,
+            k=args.sc_k,
             backbone_llm=args.backbone_llm,
             seed=args.seed,
         )
@@ -389,6 +393,7 @@ def _build_system(args):
         team_selection_random=team_random,
         codream_enhanced=codream_enhanced,
         codream_no_verify=codream_no_verify,
+        uniform_execution=args.uniform_execution,
         seed=args.seed,
     )
 

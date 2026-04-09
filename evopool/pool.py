@@ -48,6 +48,7 @@ class PoolConfig:
     team_selection_random: bool = False  # E24 ablation: random team selection
     codream_enhanced: bool = False       # E25: disagreement trigger + success extraction + domain_general
     codream_no_verify: bool = False      # E27: skip verify gate, apply all insights directly
+    uniform_execution: bool = False      # Use SC (voting) for ALL task types, no domain-specific BoK/leader-worker
     seed: int = 42
 
 
@@ -180,6 +181,7 @@ class EvoPool:
                 backbone_llm=self.config.backbone_llm,
                 max_extra_agents=self.config.mas_max_extra_agents,
                 critique_enabled=(self.config.mas_critique_rounds > 0),
+                uniform_execution=self.config.uniform_execution,
             )
             responses = mas_result.per_agent_responses
             leader_id = mas_result.leader_id
