@@ -178,6 +178,10 @@ def main():
                 "task_type": task.get("type"),
                 "domain": domain,
                 "score": score,
+                # Team composition + leader + structure chosen — needed for analysis
+                "team_agent_ids": result.get("team_agent_ids", []),
+                "leader_agent_id": result.get("leader_agent_id", None),
+                "mas_structure": result.get("mas_structure", None),
                 "lifecycle_events": result.get("lifecycle_events", []),
                 "codream_generated": result.get("codream_generated", 0),
                 "codream_verified": result.get("codream_verified", 0),
