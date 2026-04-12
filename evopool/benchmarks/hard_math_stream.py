@@ -101,8 +101,9 @@ def _load_domain(domain: str, n: int | None, rng: random.Random, shuffle: bool) 
                     if re.search(str(year), x.get("url", ""))
                 ]
             elif year == 2025:
-                # AIME 2025: TIGER-Lab/AIME25
-                ds = load_dataset("TIGER-Lab/AIME25", split="train")
+                # AIME 2025: yentinglin/aime_2025 has full 30 problems (I + II)
+                # (TIGER-Lab/AIME25 only has 15 — half the competition)
+                ds = load_dataset("yentinglin/aime_2025", split="train")
                 samples = list(ds)
             else:
                 # AIME 2026: try di-zhang-fdu/AIME_2026 or fallback
