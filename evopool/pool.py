@@ -271,9 +271,10 @@ class EvoPool:
             enhanced=self.config.codream_enhanced,
         )
 
-        # 6. Update collab table
+        # 6. Update collab table (niche-conditioned for the QD selector)
         if self.config.collab_score_enabled:
-            self.collab_table.record_team_result(team, team_score)
+            from .agent import get_niche
+            self.collab_table.record_team_result(team, team_score, niche=get_niche(task))
 
         # 7. Track task type and full task for embedding-based domain detection
         task_type = task.get("type", "general")

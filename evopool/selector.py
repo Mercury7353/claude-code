@@ -1,19 +1,38 @@
 """
-EvoPool Selection Policy.
+EvoPool contextual quality-diversity selector (anchor + complement + scout).
 
-score(agent_i, task) = w1*affinity + w2*diversity_bonus + w3*collab + w4*exploration
+Replaces the earlier greedy scalar-score selector, which cold-started by
+iterating over agents and deterministically picking the first one in a
+tie (yielding a 3-agent lock-in), and the subsequent UCB1 band-aid which
+converges to a few global best arms — the wrong objective for a system
+whose motivation is emergent *niche-based* specialization.
 
-- affinity: how well the agent's skill_memory matches the task type
-- diversity_bonus: reward for adding domain diversity to the current team
-- historical_collab_score: learned pair synergy from past collaborations
-- exploration: UCB-style bonus that rewards under-selected agents; decays as
-  an agent participates in more tasks, so early stages explore broadly and
-  later stages exploit the core. Combined with random tie-breaking, this
-  prevents the cold-start lock-in where a handful of agents are chosen
-  deterministically on task 0 (all affinities tied at the default value)
-  and then accumulate all experience via positive feedback.
+Design (gpt-5.4-pro consult, 2026-04-12, with user-driven modification):
 
-Cold start: historical_collab_score = 0 for the first MIN_COLLAB_HISTORY tasks.
+  Anchor     = argmax_i  q_i(z_t)                                    (random tiebreak)
+  Complement = argmax_j  q_j(z_t) + gamma * syn(anchor,j,z_t)
+                                  - mu    * overlap(anchor,j)        (j != anchor)
+  Scout      = argmax_k  u_k(z_t) + rho   * coverage_gap(k,z_t)
+                                  - mu'   * overlap(k, {anchor,comp})   (k not in prev)
+
+Why this produces niche specialization by construction:
+- q_i(z) is *per niche*, so a generalist can no longer win every task with a
+  single high scalar affinity. Each niche has its own champion.
+- Anchor purely exploits best q on the current niche — no crowding penalty
+  (per user: if A is genuinely the geometry champion, letting A always win
+  geometry IS specialization; the lock-in we were trying to fix was global,
+  not per-niche).
+- Complement picks a second agent that is competent on the niche but not
+  redundant with the anchor (low style overlap, positive pair synergy) —
+  opens bridge/orthogonal agents even when they are not the niche champion.
+- Scout gives under-exposed agents a seat in the niche's neighborhood so
+  that new agents, forked clones, and long-tail pool members can accumulate
+  niche experience rather than being stuck at the default forever.
+
+Cold start (all q_i(z)=0): anchor's argmax resolves via random tie-break;
+different early tasks pick different anchors; q_i(z) diverges across agents;
+specialists emerge. Uncertainty u_i(z) is high for all agents early, so the
+scout position naturally drives exploration broadly at first.
 """
 
 from __future__ import annotations
@@ -27,63 +46,70 @@ if TYPE_CHECKING:
     from .agent import Agent
 
 
-# Weight defaults (can be tuned)
-W_AFFINITY = 0.5
-W_DIVERSITY = 0.3
-W_COLLAB = 0.2
-W_EXPLORE = 0.3  # UCB bonus weight; see _exploration_bonus for derivation
+# Top-level weights
+W_COMP_SYN = 0.3       # gamma: bonus for niche-local synergy with anchor
+W_COMP_OVERLAP = 0.5   # mu:    penalty for style/memory overlap with anchor
+W_SCOUT_COVGAP = 0.3   # rho:   bonus for filling uncovered niche regions
+W_SCOUT_OVERLAP = 0.5  # mu':   penalty for overlap with anchor+complement
 
-MIN_COLLAB_HISTORY = 5  # tasks before collab score kicks in
+# Uncertainty model: u_i(z) = 1 / sqrt(1 + niche_n_i(z)); agents with no niche
+# samples start at u=1.0, those with many samples fall toward 0. Simple,
+# monotone, and robust.
+MIN_COLLAB_HISTORY = 5
 
+
+# =====================================================================
+# CollabScoreTable — niche-conditional pair synergy tracking
+# =====================================================================
 
 class CollabScoreTable:
-    """Persistent pairwise collaboration score table.
+    """Pairwise collaboration score table, niche-conditioned.
 
-    Also tracks per-agent participation counts used by the UCB-style
-    exploration bonus in select_team.
+    Records for each unordered pair (a, b) and niche z, the list of joint
+    task rewards on past niche-z tasks. Global (niche-agnostic) queries
+    still work for legacy callers.
     """
 
     def __init__(self):
-        # (agent_id_a, agent_id_b) -> list of joint task scores
-        self._scores: dict[tuple[str, str], list[float]] = defaultdict(list)
+        # (niche, agent_a, agent_b) -> list of joint task scores
+        self._scores: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+        # global pair history for legacy callers
+        self._global_scores: dict[tuple[str, str], list[float]] = defaultdict(list)
         self._task_count: int = 0
-        # agent_id -> number of tasks the agent has been on a team for
-        self._agent_task_count: dict[str, int] = defaultdict(int)
 
-    def record_team_result(self, team: list[Agent], task_score: float) -> None:
-        """Record the outcome for all pairs in a team, and increment
-        per-agent participation counts."""
+    def record_team_result(self, team: list[Agent], task_score: float, niche: str = "") -> None:
+        """Record the outcome for all pairs in a team. Stores both niche-
+        conditional and global aggregates."""
         agent_ids = [a.agent_id for a in team]
-        for aid in agent_ids:
-            self._agent_task_count[aid] += 1
         for i in range(len(agent_ids)):
             for j in range(i + 1, len(agent_ids)):
-                key = (agent_ids[i], agent_ids[j])
-                self._scores[key].append(task_score)
+                a, b = sorted([agent_ids[i], agent_ids[j]])
+                if niche:
+                    self._scores[(niche, a, b)].append(task_score)
+                self._global_scores[(a, b)].append(task_score)
         self._task_count += 1
 
-    def get_pair_score(self, agent_id_a: str, agent_id_b: str) -> float:
-        """Return mean historical score for a pair, or 0 if insufficient history."""
+    def get_pair_score(self, agent_id_a: str, agent_id_b: str, niche: str = "") -> float:
+        """Mean historical joint reward for a pair, optionally within a niche.
+        Returns 0 before MIN_COLLAB_HISTORY total tasks are logged."""
         if self._task_count < MIN_COLLAB_HISTORY:
             return 0.0
-        key = (agent_id_a, agent_id_b)
-        alt_key = (agent_id_b, agent_id_a)
-        scores = self._scores.get(key, self._scores.get(alt_key, []))
+        a, b = sorted([agent_id_a, agent_id_b])
+        if niche:
+            scores = self._scores.get((niche, a, b), [])
+        else:
+            scores = self._global_scores.get((a, b), [])
         if not scores:
             return 0.0
         return sum(scores) / len(scores)
 
-    def get_team_score(self, agent_ids: list[str]) -> float:
-        """Return mean pair score for a team (mean over all pairs)."""
+    def get_team_score(self, agent_ids: list[str], niche: str = "") -> float:
+        """Mean pair score for a team (mean over all pairs)."""
         pairs = []
         for i in range(len(agent_ids)):
             for j in range(i + 1, len(agent_ids)):
-                pairs.append(self.get_pair_score(agent_ids[i], agent_ids[j]))
+                pairs.append(self.get_pair_score(agent_ids[i], agent_ids[j], niche))
         return sum(pairs) / len(pairs) if pairs else 0.0
-
-    def get_agent_count(self, agent_id: str) -> int:
-        """Number of past tasks the agent has been selected for."""
-        return self._agent_task_count.get(agent_id, 0)
 
     @property
     def task_count(self) -> int:
@@ -91,9 +117,9 @@ class CollabScoreTable:
 
     def to_dict(self) -> dict:
         return {
-            "scores": {f"{k[0]}|{k[1]}": v for k, v in self._scores.items()},
+            "scores": {f"{k[0]}|{k[1]}|{k[2]}": v for k, v in self._scores.items()},
+            "global_scores": {f"{k[0]}|{k[1]}": v for k, v in self._global_scores.items()},
             "task_count": self._task_count,
-            "agent_task_count": dict(self._agent_task_count),
         }
 
     @classmethod
@@ -101,33 +127,99 @@ class CollabScoreTable:
         table = cls()
         table._task_count = d.get("task_count", 0)
         for key_str, scores in d.get("scores", {}).items():
+            parts = key_str.split("|", 2)
+            if len(parts) == 3:
+                table._scores[(parts[0], parts[1], parts[2])] = scores
+        # Back-compat: old format stored 2-tuple keys in "scores" without niche.
+        # Merge those into _global_scores.
+        for key_str, scores in d.get("global_scores", {}).items():
             parts = key_str.split("|", 1)
             if len(parts) == 2:
-                table._scores[(parts[0], parts[1])] = scores
-        for aid, n in d.get("agent_task_count", {}).items():
-            table._agent_task_count[aid] = n
+                table._global_scores[(parts[0], parts[1])] = scores
         return table
 
+
+# =====================================================================
+# Per-agent helpers
+# =====================================================================
+
+def _niche_q(agent: Agent, niche: str) -> float:
+    """EWMA of reward on tasks in `niche`. Default 0 (no prior)."""
+    return agent.profile.niche_q.get(niche, 0.0)
+
+
+def _niche_uncertainty(agent: Agent, niche: str) -> float:
+    """1 / sqrt(1 + niche_n). High when agent has little experience on niche."""
+    n = agent.profile.niche_n.get(niche, 0)
+    return 1.0 / math.sqrt(1.0 + n)
+
+
+def _style_signature(agent: Agent) -> list[float]:
+    """Cheap style signature = sorted skill_memory values over a stable key
+    order. Two agents with similar competence-over-domains vectors count as
+    stylistically overlapping. Returns empty list if no skill memory yet."""
+    if not agent.profile.skill_memory:
+        return []
+    keys = sorted(agent.profile.skill_memory.keys())
+    return [agent.profile.skill_memory.get(k, 0.0) for k in keys]
+
+
+def _overlap(a: Agent, b: Agent) -> float:
+    """Cosine similarity of style signatures. Agents without overlapping
+    skill-memory keys get overlap 0 (which correctly reads as "no overlap
+    evidence yet", not "identical")."""
+    # Build aligned vectors over union of keys
+    ka = set(a.profile.skill_memory.keys())
+    kb = set(b.profile.skill_memory.keys())
+    keys = sorted(ka | kb)
+    if not keys:
+        return 0.0
+    va = [a.profile.skill_memory.get(k, 0.0) for k in keys]
+    vb = [b.profile.skill_memory.get(k, 0.0) for k in keys]
+    na = math.sqrt(sum(x * x for x in va))
+    nb = math.sqrt(sum(x * x for x in vb))
+    if na == 0 or nb == 0:
+        return 0.0
+    return sum(x * y for x, y in zip(va, vb)) / (na * nb)
+
+
+def _set_overlap(k: Agent, members: list[Agent]) -> float:
+    if not members:
+        return 0.0
+    return max(_overlap(k, m) for m in members)
+
+
+def _coverage_gap(agent: Agent, niche: str) -> float:
+    """How under-represented this agent's *niche profile* is on the current
+    niche. Cheap version: 1 - fraction of the agent's total niche exposures
+    spent on this particular niche. Encourages diversifying an agent's niche
+    footprint, not just piling more tasks onto an already-saturated niche."""
+    total = sum(agent.profile.niche_n.values())
+    if total == 0:
+        return 1.0
+    return 1.0 - (agent.profile.niche_n.get(niche, 0) / total)
+
+
+# =====================================================================
+# Team assembly
+# =====================================================================
 
 def select_team(
     pool: list[Agent],
     task: dict,
     collab_table: CollabScoreTable,
     k: int = 3,
-    w_affinity: float = W_AFFINITY,
-    w_diversity: float = W_DIVERSITY,
-    w_collab: float = W_COLLAB,
-    w_explore: float = W_EXPLORE,
+    w_comp_syn: float = W_COMP_SYN,
+    w_comp_overlap: float = W_COMP_OVERLAP,
+    w_scout_covgap: float = W_SCOUT_COVGAP,
+    w_scout_overlap: float = W_SCOUT_OVERLAP,
     rng: random.Random | None = None,
+    **_legacy,  # absorb old `w_affinity`, `w_diversity`, `w_collab` kwargs silently
 ) -> list[Agent]:
-    """
-    Select k agents from the pool for a task using the EvoPool selection policy.
+    """Select k=3 agents via anchor + complement + scout roles, conditioned on
+    the task's niche. See module docstring for full rationale.
 
-    Uses greedy sequential selection: add agents one by one, each time picking
-    the agent that maximizes the incremental score. The score includes a
-    UCB-style exploration bonus that favors under-selected agents and decays
-    as agents participate; ties are broken randomly to prevent iteration-
-    order lock-in at cold start.
+    Larger k > 3 falls back to repeated scout picks after anchor+complement.
     """
     if len(pool) <= k:
         return list(pool)
@@ -135,159 +227,70 @@ def select_team(
     if rng is None:
         rng = random.Random()
 
-    task_type = task.get("type", "general")
-    total_tasks = collab_table.task_count
-    selected: list[Agent] = []
-    remaining = list(pool)
+    # Niche inference — identical to agent.get_niche() to keep state/selector
+    # in sync without circular import. Priority: subtype > domain > type.
+    niche = ""
+    for key in ("subtype", "domain", "type"):
+        v = task.get(key)
+        if v:
+            niche = str(v)
+            break
 
-    for _ in range(k):
-        # Score every remaining candidate.
-        scores: list[tuple[float, Agent]] = []
-        for candidate in remaining:
-            score = _compute_score(
-                candidate=candidate,
-                task_type=task_type,
-                current_team=selected,
-                collab_table=collab_table,
-                total_tasks=total_tasks,
-                w_affinity=w_affinity,
-                w_diversity=w_diversity,
-                w_collab=w_collab,
-                w_explore=w_explore,
-            )
-            scores.append((score, candidate))
+    # ---- Anchor: argmax q_i(z_t), random tie-break ----
+    anchor_scores = [(_niche_q(a, niche), a) for a in pool]
+    max_a = max(s for s, _ in anchor_scores)
+    anchor_candidates = [a for s, a in anchor_scores if s >= max_a - 1e-9]
+    anchor = rng.choice(anchor_candidates)
 
-        # Pick the max score, breaking ties uniformly at random.
-        # (Without random tie-breaking, cold-start scores are all equal and
-        # the first agent in iteration order always wins, which is exactly
-        # the lock-in we saw empirically.)
-        max_score = max(s for s, _ in scores)
-        top_candidates = [a for s, a in scores if s >= max_score - 1e-9]
-        best_agent = rng.choice(top_candidates)
+    if k == 1:
+        return [anchor]
 
-        selected.append(best_agent)
-        remaining.remove(best_agent)
+    # ---- Complement: competence + synergy - overlap (j != anchor) ----
+    comp_scores: list[tuple[float, Agent]] = []
+    for a in pool:
+        if a is anchor:
+            continue
+        q = _niche_q(a, niche)
+        syn = collab_table.get_pair_score(anchor.agent_id, a.agent_id, niche)
+        ovl = _overlap(anchor, a)
+        score = q + w_comp_syn * syn - w_comp_overlap * ovl
+        comp_scores.append((score, a))
+    max_c = max(s for s, _ in comp_scores)
+    comp_candidates = [a for s, a in comp_scores if s >= max_c - 1e-9]
+    complement = rng.choice(comp_candidates)
 
-    return selected
+    if k == 2:
+        return [anchor, complement]
 
+    # ---- Scout: uncertainty + coverage_gap - overlap(prev) ----
+    chosen = [anchor, complement]
+    remaining = [a for a in pool if a is not anchor and a is not complement]
 
-def _compute_score(
-    candidate: Agent,
-    task_type: str,
-    current_team: list[Agent],
-    collab_table: CollabScoreTable,
-    total_tasks: int,
-    w_affinity: float,
-    w_diversity: float,
-    w_collab: float,
-    w_explore: float,
-) -> float:
-    affinity = _affinity_score(candidate, task_type)
-    diversity = _diversity_bonus(candidate, current_team, task_type)
-    collab = _collab_score(candidate, current_team, collab_table)
-    explore = _exploration_bonus(candidate, collab_table, total_tasks)
-    return (
-        w_affinity * affinity
-        + w_diversity * diversity
-        + w_collab * collab
-        + w_explore * explore
-    )
+    scout_scores: list[tuple[float, Agent]] = []
+    for a in remaining:
+        u = _niche_uncertainty(a, niche)
+        cg = _coverage_gap(a, niche)
+        ovl_prev = _set_overlap(a, chosen)
+        score = u + w_scout_covgap * cg - w_scout_overlap * ovl_prev
+        scout_scores.append((score, a))
+    max_s = max(s for s, _ in scout_scores)
+    scout_candidates = [a for s, a in scout_scores if s >= max_s - 1e-9]
+    scout = rng.choice(scout_candidates)
+    chosen.append(scout)
 
+    # If k > 3, keep adding scouts (rare in practice).
+    remaining = [a for a in remaining if a is not scout]
+    while len(chosen) < k and remaining:
+        more_scores: list[tuple[float, Agent]] = []
+        for a in remaining:
+            u = _niche_uncertainty(a, niche)
+            cg = _coverage_gap(a, niche)
+            ovl_prev = _set_overlap(a, chosen)
+            more_scores.append((u + w_scout_covgap * cg - w_scout_overlap * ovl_prev, a))
+        max_m = max(s for s, _ in more_scores)
+        more_candidates = [a for s, a in more_scores if s >= max_m - 1e-9]
+        pick = rng.choice(more_candidates)
+        chosen.append(pick)
+        remaining = [a for a in remaining if a is not pick]
 
-def _exploration_bonus(
-    candidate: Agent,
-    collab_table: CollabScoreTable,
-    total_tasks: int,
-) -> float:
-    """UCB1-style bonus that rewards under-selected agents.
-
-    bonus = sqrt(2 * log(total + 1) / (n_selected + 1))
-
-    The scale is set so that a never-selected agent receives a bonus that
-    can overcome the typical affinity gap (affinity 1.0 vs default 0.2,
-    scaled by W_AFFINITY=0.5 = 0.4) at moderate stream lengths; this
-    prevents the positive-feedback lock-in where three agents with
-    slightly-higher affinity monopolize selection forever.
-
-    Numerical examples with W_EXPLORE=0.3:
-      total=10,  n=0  -> 0.3 * sqrt(2*2.4/1)   = 0.66
-      total=10,  n=10 -> 0.3 * sqrt(2*2.4/11)  = 0.20
-      total=100, n=0  -> 0.3 * sqrt(2*4.6/1)   = 0.91
-      total=100, n=100-> 0.3 * sqrt(2*4.6/101) = 0.09
-
-    Once the pool reaches saturation (every agent has nontrivial experience),
-    affinity dominates and the bonus becomes a small perturbation.
-    """
-    n = collab_table.get_agent_count(candidate.agent_id)
-    return math.sqrt(2.0 * math.log(total_tasks + 1.0) / (n + 1.0))
-
-
-def _affinity_score(agent: Agent, task_type: str) -> float:
-    """How well does the agent's skill match the task type?"""
-    return agent.profile.skill_memory.get(task_type, 0.2)
-
-
-def _diversity_bonus(
-    candidate: Agent,
-    current_team: list[Agent],
-    task_type: str = "",
-) -> float:
-    """
-    Reward for adding domain diversity to the current team.
-    Higher = candidate covers domains not already covered by team.
-
-    Key fix: penalize off-domain diversity. If the task has a known type
-    and the current team already has strong task affinity, cross-domain
-    diversity should NOT outweigh relevance.  We scale the diversity bonus
-    by the candidate's affinity for the task type so that off-domain agents
-    (high diversity but zero relevance) don't crowd out specialists.
-    """
-    if not current_team:
-        return 0.5  # Neutral for first selection
-
-    team_domains = {
-        domain
-        for agent in current_team
-        for domain, score in agent.profile.skill_memory.items()
-        if score > 0.5
-    }
-    candidate_domains = {
-        domain
-        for domain, score in candidate.profile.skill_memory.items()
-        if score > 0.5
-    }
-    new_domains = candidate_domains - team_domains
-    if not candidate_domains:
-        raw_diversity = 0.0
-    else:
-        raw_diversity = len(new_domains) / len(candidate_domains)
-
-    # Scale by task relevance: an off-domain agent's diversity bonus is
-    # dampened in proportion to how irrelevant it is for this task.
-    # Agents below the affinity floor get near-zero diversity credit, preventing
-    # code specialists from joining math teams based purely on "diverse" skills.
-    if task_type:
-        task_affinity = candidate.profile.skill_memory.get(task_type, 0.2)
-        # Hard gate: below 0.3 affinity, diversity contributes almost nothing.
-        # This ensures domain specialists always outrank off-domain generalists.
-        if task_affinity < 0.3:
-            return raw_diversity * 0.1
-        # Above threshold: linearly scale from 0.3→0.5 affinity
-        relevance_scale = min(1.0, (task_affinity - 0.3) / 0.2)
-        return raw_diversity * relevance_scale
-    return raw_diversity
-
-
-def _collab_score(
-    candidate: Agent,
-    current_team: list[Agent],
-    collab_table: CollabScoreTable,
-) -> float:
-    """Mean historical collaboration score between candidate and each current team member."""
-    if not current_team:
-        return 0.0
-    scores = [
-        collab_table.get_pair_score(candidate.agent_id, member.agent_id)
-        for member in current_team
-    ]
-    return sum(scores) / len(scores)
+    return chosen

@@ -14,6 +14,27 @@ from typing import Any, ClassVar
 from .llm import llm_call
 
 
+def get_niche(task: dict) -> str:
+    """Derive a fine-grained niche label for the contextual quality-diversity
+    selector.
+
+    Priority:
+      1. task["subtype"]  — e.g. MATH's "algebra" / "geometry" / "number_theory"
+      2. task["domain"]   — coarse but always present
+      3. task["type"]     — final fallback
+
+    Using subtype where available gives the selector a fine enough lattice to
+    distinguish specialists within a domain (e.g. geometry vs number-theory
+    experts on Hard Math), which is what enables multiple niche specialists
+    to coexist rather than one generalist monopolizing every anchor slot.
+    """
+    for key in ("subtype", "domain", "type"):
+        v = task.get(key)
+        if v:
+            return str(v)
+    return "unknown"
+
+
 @dataclass
 class Experience:
     """A concrete solving experience stored in an agent's private buffer."""
@@ -40,8 +61,18 @@ class AgentProfile:
     perf_stats: dict[str, list[float]]  # domain -> rolling performance scores
     experience_buffer: list[Experience] = field(default_factory=list)  # private experiences
 
+    # Niche-indexed competence (EWMA) and counts. `niche` is a fine-grained
+    # label (e.g. subtype "geometry"/"algebra"/etc. on Hard Math; domain on
+    # heterogeneous streams). Used by the contextual quality-diversity
+    # selector: per-niche competence lets different agents become anchor on
+    # different niches, so multiple specialists can coexist rather than one
+    # generalist winning every task.
+    niche_q: dict[str, float] = field(default_factory=dict)  # niche -> EWMA reward
+    niche_n: dict[str, int] = field(default_factory=dict)    # niche -> #times selected
+
     TASK_HISTORY_LIMIT: int = field(default=20, repr=False, compare=False)
     EXPERIENCE_BUFFER_LIMIT: int = field(default=50, repr=False, compare=False)
+    _NICHE_EWMA_ALPHA: ClassVar[float] = 0.2
 
     def to_dict(self) -> dict:
         d = {
@@ -57,6 +88,8 @@ class AgentProfile:
                  "relevance_weight": e.relevance_weight}
                 for e in self.experience_buffer[-self.EXPERIENCE_BUFFER_LIMIT:]
             ],
+            "niche_q": dict(self.niche_q),
+            "niche_n": dict(self.niche_n),
         }
         # Persist all memory tiers (legacy — kept for backward compat)
         if hasattr(self, "subdomain_insights") and self.subdomain_insights:
@@ -79,6 +112,8 @@ class AgentProfile:
             collab_log=d["collab_log"],
             perf_stats=d["perf_stats"],
             experience_buffer=exp_buf,
+            niche_q=dict(d.get("niche_q", {})),
+            niche_n=dict(d.get("niche_n", {})),
         )
         if "subdomain_insights" in d:
             obj.subdomain_insights = d["subdomain_insights"]
@@ -418,6 +453,16 @@ class Agent:
         """Update profile after a task based on performance feedback."""
         task_type = task.get("type", "general")
         score = outcome.get("score", 0.5)
+
+        # Update niche-indexed competence (for the contextual quality-diversity
+        # selector). `niche` is a fine-grained label derived from the task
+        # (subtype / domain / type — see get_niche). EWMA update on the agent's
+        # own reward for this task.
+        niche = get_niche(task)
+        prev_q = self.profile.niche_q.get(niche, 0.0)
+        alpha_n = AgentProfile._NICHE_EWMA_ALPHA
+        self.profile.niche_q[niche] = (1 - alpha_n) * prev_q + alpha_n * score
+        self.profile.niche_n[niche] = self.profile.niche_n.get(niche, 0) + 1
 
         # Update skill memory with adaptive learning rate.
         # Use faster updates early (few observations) and slower updates later.
