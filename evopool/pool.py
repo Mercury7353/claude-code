@@ -210,34 +210,39 @@ class EvoPool:
         team_score = evaluation.get("team_score", 0.5)
         pool_mean = self._compute_pool_mean_score()
 
-        # Blend evaluator score with leader's process feedback (leader mode only)
-        if self.config.mas_mode == "leader" and _leader_feedback:
-            for agent in team:
-                aid = agent.agent_id
-                eval_score = evaluation.get(aid, team_score)
-                leader_hint = _leader_feedback.get(aid, {}).get("score_hint", eval_score)
-                evaluation[aid] = 0.7 * eval_score + 0.3 * float(leader_hint)
+        # (The old leader-process-feedback blending that wrote per-agent
+        # evaluation[aid] back is removed: downstream consumers now use
+        # team_score exclusively, so the blend had no effect.)
 
-        # 4. Individual profile update
+        # Credit assignment: every team member on this task receives the
+        # same team_score. Per-agent response-matching scores (what the
+        # evaluator returns as evaluation[agent_id]) are unreliable in
+        # non-voting MAS modes — e.g., in generator-critic mode mas.py
+        # sets critics' responses to the empty string, which makes the
+        # evaluator score them 0.0 regardless of how well they critiqued.
+        # A principled shared-reward signal avoids this artifact and is
+        # consistent with the multi-agent evaluation protocol (the user
+        # sees only the team's final answer).
+
+        # 4. Individual profile update (all team members get team_score)
         for agent in team:
-            agent_score = evaluation.get(agent.agent_id, team_score)
             outcome = {
-                "score": agent_score,
-                "label": "correct" if agent_score > 0.5 else "incorrect",
+                "score": team_score,
+                "label": "correct" if team_score > 0.5 else "incorrect",
                 "pool_mean_score": pool_mean,
             }
             agent.update_from_feedback(task, outcome, self.config.backbone_llm)
 
-        # 4b. Generate experience entries for each agent (1 LLM call each)
+        # 4b. Generate experience entries for each agent (1 LLM call each).
+        # The agent's own response text is still the conditioning input for
+        # the reflection prompt; only the reward signal is shared.
         for agent in team:
             agent_resp = responses.get(agent.agent_id, {})
-            agent_score = evaluation.get(agent.agent_id, team_score)
             agent.generate_experience(
-                task, agent_resp.get("response", ""), agent_score,
+                task, agent_resp.get("response", ""), team_score,
                 self.config.backbone_llm,
             )
-            # Update relevance weights of previously injected experiences
-            agent.update_experience_weights(task, agent_score)
+            agent.update_experience_weights(task, team_score)
 
         # 4c. Leader records leadership experience (which structure worked/failed)
         if self.config.mas_mode == "leader" and leader_id and mas_result:
@@ -261,7 +266,12 @@ class EvoPool:
         codream_session = run_codream(
             team=team,
             task=task,
-            task_results={a.agent_id: {"score": evaluation.get(a.agent_id, team_score)} for a in team},
+            # Shared-reward signal (see credit-assignment comment above).
+            # CoDream's reflect/contrast phases thus see a uniform team score
+            # per agent; differentiation across agents comes from each agent's
+            # own response text, which is still retrieved separately by the
+            # CoDream phases (via agent.profile + responses).
+            task_results={a.agent_id: {"score": team_score} for a in team},
             backbone_llm=self.config.backbone_llm,
             mode=self.config.codream_mode,
             strength_threshold=self.config.codream_strength_threshold,
